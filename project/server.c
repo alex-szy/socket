@@ -38,10 +38,11 @@ int main(int argc, char *argv[]) {
 	// Error if did_bind < 0 :(
 	if (did_bind < 0) return errno;
 
-	/* 4. Create buffer to store incoming data */
+	/* 4. Create buffer to store data */
 	int BUF_SIZE = 1024;
 	char client_buf[BUF_SIZE];
 	char server_buf[BUF_SIZE];
+
 	struct sockaddr_in clientaddr; // Same information, but about client
 	socklen_t clientsize = sizeof(clientaddr);
 
@@ -52,18 +53,18 @@ int main(int argc, char *argv[]) {
 								// socket  store data  how much
 									0, (struct sockaddr*) &clientaddr,
 									&clientsize);
-		// Execution will stop here until `BUF_SIZE` is read or termination/error
-		// Error if bytes_recvd < 0 :(
-			/* 6. Inspect data from client */
-		if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
-		else if (bytes_recvd > 0) {
+
+		if (bytes_recvd > 0) {
+			// Write to stdout
 		 	write(1, client_buf, bytes_recvd);
 			char* client_ip = inet_ntoa(clientaddr.sin_addr);
 							// "Network bytes to address string"
 			int client_port = ntohs(clientaddr.sin_port); // Little endian
 			fprintf(stderr, "%s:%d\n", client_ip, client_port);
+			// Got the address, now ready to send
 			ready_to_send = true;
-		}
+
+		} else if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
 
 
 		/* 7. Send data back to client */
@@ -78,13 +79,9 @@ int main(int argc, char *argv[]) {
 								// flags   where to send
 								sizeof(clientaddr));
 			if (did_send < 0) die("send");
+
 		} else if (bytes_read < 0 && errno != EAGAIN) die("stdin");
 	}
-
-
-	/* 8. You're done! Terminate the connection */
-	close(sockfd);
-	return 0;
 }
 
 // TODO: need waiting for stdin not to interfere with socket

@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 	int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 							// use IPv4  use UDP
 
-	/* Make stdin and socket non-blocking */
+	// Make stdin and socket non-blocking
 	int socket_nonblock = fcntl(sockfd, F_SETFL, O_NONBLOCK);
 	if (socket_nonblock < 0) die("non-block socket");
 	int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
@@ -25,16 +25,16 @@ int main(int argc, char *argv[]) {
 	if (argc > 1 && strcmp(argv[1], "localhost"))
 		serveraddr.sin_addr.s_addr = inet_addr(argv[1]);
 	else
-		serveraddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+		serveraddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	socklen_t serversize = sizeof(serveraddr); // Temp buffer for recvfrom API
 
 	// Set sending port
 	int SEND_PORT;
 	if (argc > 2) SEND_PORT = atoi(argv[2]);
 	else SEND_PORT = 8080;
 	serveraddr.sin_port = htons(SEND_PORT); // Big endian
-	socklen_t serversize = sizeof(serveraddr); // Temp buffer for recvfrom API
 
-	/* 4. Create buffer to store incoming data */
+	/* 4. Create buffer to store data */
 	int BUF_SIZE = 1024;
 	char client_buf[BUF_SIZE];
 	char server_buf[BUF_SIZE];
