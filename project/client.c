@@ -25,7 +25,7 @@ int main(int argc, char *argv[]) {
 	if (argc > 1 && strcmp(argv[1], "localhost"))
 		serveraddr.sin_addr.s_addr = inet_addr(argv[1]);
 	else
-		serveraddr.sin_addr.s_addr = INADDR_LOOPBACK;
+		serveraddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
 	// Set sending port
 	int SEND_PORT;
