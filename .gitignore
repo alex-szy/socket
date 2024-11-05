@@ -4,3 +4,4 @@ project/*.out
 *.zip
 project/project
 results
+.vscode/
