@@ -26,6 +26,8 @@ int make_nonblock_socket() {
 }
 
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
+	// drop packet 75%
+	if (rand() > RANDMASK >> 1) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
 	int did_send = sendto(sockfd, pkt, sizeof(*pkt),
 						// socket  send data   how much to send
@@ -46,4 +48,72 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 	// Error if bytes_recvd < 0 :(
 	if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
 	return bytes_recvd;
+}
+
+struct queue_t {
+	packet queue[Q_SIZE];
+	uint8_t front;
+	uint8_t back;
+	uint8_t size;
+};
+
+static void increment(uint8_t *idx) {
+	if (*idx == Q_SIZE - 1)
+		*idx = 0;
+	else
+		(*idx)++;
+}
+
+static void decrement(uint8_t *idx) {
+	if (*idx == 0)
+		*idx = Q_SIZE - 1;
+	else
+		(*idx)--;
+}
+
+q_handle_t q_init() {
+	q_handle_t self = calloc(Q_SIZE, sizeof(packet));
+	return self;
+}
+
+void q_destroy(q_handle_t self) {
+	free(self);
+}
+
+void q_clear(q_handle_t self) {
+	self->front = 0;
+	self->back = 0;
+}
+
+void q_push(q_handle_t self, packet *pkt) {
+	if (self->front == self->back) {
+		increment(&self->front);
+		self->size--;
+		fprintf(stderr, "Dropped packet because buffer was full");
+	}
+	self->queue[self->back] = *pkt;
+	increment(&self->back);
+	self->size++;
+}
+
+packet* q_pop(q_handle_t self) {
+	if (self->size == 0)
+		return NULL;
+	else {
+		packet* retval = &self->queue[self->front];
+		increment(&self->front);
+		self->size--;
+		return retval;
+	}
+}
+
+packet* q_top(q_handle_t self) {
+	if (self->size == 0)
+		return NULL;
+	else
+		return &self->queue[self->front];
+}
+
+size_t q_size(q_handle_t self) {
+	return self->size;
 }
