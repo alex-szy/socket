@@ -20,12 +20,16 @@ int make_nonblock_socket() {
 	// Make stdin and socket non-blocking
 	int socket_nonblock = fcntl(sockfd, F_SETFL, O_NONBLOCK);
 	if (socket_nonblock < 0) die("non-block socket");
-	int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
-	if (stdin_nonblock < 0) die("non-block stdin");
 	return sockfd;
 }
 
+void stdin_nonblock() {
+	int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+	if (stdin_nonblock < 0) die("non-block stdin");
+}
+
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
+	fprintf(stderr, "Sent packet: ack %08x, seq %08x, flags %x, length %d\n", pkt->ack, pkt->seq, pkt->flags, pkt->length);
 	// drop packet 75%
 	if (rand() > RANDMASK >> 1) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
@@ -47,7 +51,19 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 								&serversize);
 	// Error if bytes_recvd < 0 :(
 	if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
+	if (bytes_recvd > 0)
+		fprintf(stderr, "Recv packet: seq %08x, ack %08x, flags %x, length %d\n", pkt->seq, pkt->ack, pkt->flags, pkt->length);
 	return bytes_recvd;
+}
+
+int read_packet_payload(packet *pkt) {
+	int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
+	if (bytes_read >= 0) pkt->length = bytes_read;
+	return bytes_read;
+}
+
+void write_packet_payload(packet *pkt) {
+	write(STDOUT_FILENO, &pkt->payload, pkt->length);
 }
 
 struct queue_t {
@@ -86,10 +102,10 @@ void q_clear(q_handle_t self) {
 }
 
 void q_push(q_handle_t self, packet *pkt) {
-	if (self->front == self->back) {
+	if (self->size == Q_SIZE) {
 		increment(&self->front);
 		self->size--;
-		fprintf(stderr, "Dropped packet because buffer was full");
+		fprintf(stderr, "Dropped packet because buffer was full\n");
 	}
 	self->queue[self->back] = *pkt;
 	increment(&self->back);

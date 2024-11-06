@@ -20,10 +20,13 @@ typedef struct {
 void die(const char s[]);
 
 int make_nonblock_socket();
+void stdin_nonblock();
 
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt);
-
 int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt);
+
+int read_packet_payload(packet* pkt);
+void write_packet_payload(packet* pkt);
 
 typedef struct queue_t* q_handle_t;
 

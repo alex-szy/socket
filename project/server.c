@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <time.h>
 #include "utils.h"
 
 
@@ -32,6 +33,7 @@ int main(int argc, char *argv[]) {
 
 	/* 1. Create socket */
 	int sockfd = make_nonblock_socket();
+	stdin_nonblock();
 
 	/* 2. Construct our address */
 	struct sockaddr_in servaddr;
@@ -51,53 +53,73 @@ int main(int argc, char *argv[]) {
 
 	uint32_t recv_seq, send_seq;
 	send_seq = rand() & RANDMASK;
-	fprintf(stderr, "send seq is: 0x%x\n", send_seq);
-	packet pkt_recv, pkt_send;
+	packet pkt_recv = {};
+	packet pkt_send = {};
+
+	q_handle_t send_q = q_init();
+	q_handle_t recv_q = q_init();
 
 	struct sockaddr_in clientaddr; // Same information, but about client
 
 	bool ready_to_send = false;
 	bool syn = false;
 
+	clock_t before = clock();
+
 	for (;;) {/* 5. Listen for data from clients */
-		if (ready_to_send) {
-			fprintf(stderr, "Handshake complete!\n");
-			return 0;
+
+		clock_t now = clock();
+		// Packet retransmission
+		if (now - before > CLOCKS_PER_SEC) { // 1 second timer
+			before = now;
+			// send the packet with lowest seq number in sending buffer, which is probably the top packet
+			packet* send = q_top(send_q);
+			// fprintf(stderr, "q size: %ld\n", q_size(send_q));
+			if (send != NULL)
+				send_packet(sockfd, &clientaddr, send);
 		}
+
 		int bytes_recvd = recv_packet(sockfd, &clientaddr, &pkt_recv);
 		if (bytes_recvd > 0) {
 			if (pkt_recv.flags & PKT_SYN) {
 				// syn packet received
-				fprintf(stderr, "Received syn packet\n");
-				recv_seq = pkt_recv.seq + 1;
-				pkt_send.ack = recv_seq;
+				pkt_send.ack = pkt_recv.seq + 1;
 				pkt_send.seq = send_seq;
 				pkt_send.length = 0;
 				pkt_send.flags = PKT_ACK | PKT_SYN;
-				syn = true;
-				send_packet(sockfd, &clientaddr, &pkt_send);
-				fprintf(stderr, "Sent syn ack packet\n");
-			} else if (pkt_recv.flags & PKT_ACK) { // normal ack
-
-				if (pkt_recv.ack > send_seq + 1) {
-					// reject
-				} else if (pkt_recv.ack < send_seq + 1) { // go back
+				if (!syn) {
 					recv_seq = pkt_recv.seq + 1;
-					send_seq = pkt_recv.ack;
-
-					
-				} else { // correct packet number
+					syn = true;
+					q_push(send_q, &pkt_send);
+				}
+				send_packet(sockfd, &clientaddr, &pkt_send);
+			} else if (pkt_recv.flags & PKT_ACK) { // normal ack
+				// remove all acked packets from send queue
+				if (!ready_to_send) {
 					ready_to_send = true;
-					// recv_seq = pkt_recv.seq + 1;
-					// send_seq = pkt_recv.ack;
+					fprintf(stderr, "Handshake complete!\n");
+				}
+				packet *pkt = q_top(send_q);
+				while (pkt != NULL && pkt->seq < pkt_recv.ack) {
+					q_pop(send_q);
+					pkt = q_top(send_q);
+				}
+			}
+		} else {
+			// nothing received, check for data to send
+			if (q_size(send_q) < Q_SIZE){
+				int bytes_read = read_packet_payload(&pkt_send);
+				if (bytes_read > 0) {
+					pkt_send.seq = send_seq;
+					send_seq++;
+					pkt_send.flags = 0; // data packet
 
-					// pkt_send.ack = recv_seq;
-					// pkt_send.seq = send_seq;
-					// pkt_send.length = 0;
-					// pkt_send.flags
+					send_packet(sockfd, &servaddr, &pkt_send);
+					q_push(send_q, &pkt_send);
 				}
 			}
 		}
+	}
 		
 
 		// if (bytes_recvd > 0) {
@@ -127,7 +149,6 @@ int main(int argc, char *argv[]) {
 		// 	if (did_send < 0) die("send");
 
 		// } else if (bytes_read < 0 && errno != EAGAIN) die("stdin");
-	}
 }
 
 // TODO: need waiting for stdin not to interfere with socket

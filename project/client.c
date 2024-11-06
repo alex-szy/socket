@@ -44,57 +44,71 @@ int main(int argc, char *argv[]) {
 
 	/* 4. Create buffer to store data */
 	int BUF_SIZE = 1024;
-	uint32_t recv_seq, send_seq;
-	bool acked = false;
+	uint32_t recv_seq; // seq number of the incoming packets
+	uint32_t send_seq; // seq number of outgoing packets
+	bool recved_syn_ack = false;
 	send_seq = rand() & RANDMASK;
 
 	// Create the SYN packet
-	packet send_pkt = {0};
-	packet recv_pkt = {0};
-	send_pkt.length = 0;
-	send_pkt.seq = send_seq;
-	fprintf(stderr, "send_seq is: 0x%x\n", send_seq);
-	send_pkt.flags = PKT_SYN;
+	packet pkt_send = {0};
+	packet pkt_recv = {0};
+	pkt_send.length = 0;
+	pkt_send.seq = send_seq;
+	pkt_send.flags = PKT_SYN;
 
 	clock_t before = clock();
 
+	q_handle_t send_q = q_init();
+	q_handle_t recv_q = q_init();
+	q_push(send_q, &pkt_send);
+
+	// pure acks no consume sequence numbers
 
 	for (;;) {
-		if (acked) {
-			fprintf(stderr, "Handshake complete!\n");
-			return 0;
-		} else {
-			clock_t now = clock();
-			if (now - before > CLOCKS_PER_SEC) { // 1 second timer
-				before = now;
-				// send the syn packet
-				send_packet(sockfd, &serveraddr, &send_pkt);
-				fprintf(stderr, "Sent syn packet\n");
-			}
-			if (recv_packet(sockfd, &serveraddr, &recv_pkt)) {
-				// check for ack packet
-				if (recv_pkt.flags & PKT_ACK) {
-					// Syn ack
-					if (recv_pkt.flags & PKT_SYN) {
-						// send syn ack ack
-						fprintf(stderr, "Received syn ack packet\n");
-						recv_seq = recv_pkt.seq + 1;
-						send_seq = recv_pkt.ack;
-						send_pkt.ack = recv_seq;
-						send_pkt.seq = send_seq;
-						send_pkt.flags = PKT_ACK;
-						send_packet(sockfd, &serveraddr, &send_pkt);
-						fprintf(stderr, "Send syn ack ack packet\n");
-						acked = true;
-					} else { // normal ack
-						// TODO: data transmission
-					}
-				} else {
-					// not an ack, means data packet
+		clock_t now = clock();
+		// Packet retransmission
+		if (now - before > CLOCKS_PER_SEC) { // 1 second timer
+			before = now;
+			// send the packet with lowest seq number in sending buffer, which is probably the top packet
+			packet* send = q_top(send_q);
+			if (send != NULL)
+				send_packet(sockfd, &serveraddr, send);
+		}
+
+		if (recv_packet(sockfd, &serveraddr, &pkt_recv) > 0) {
+			// check for ack packet
+			if (pkt_recv.flags & PKT_ACK) {
+				// for pure acks, do not respond. only clear send packets from queue
+				// reset the timer
+				before = clock();
+				// pop all the packets from the q which have seq numbers less than the ack of this packet
+				// if there's nothing to acknowledge, does nothing
+				packet *pkt = q_top(send_q);
+				while (pkt != NULL && pkt->seq < pkt_recv.ack) {
+					q_pop(send_q);
+					pkt = q_top(send_q);
 				}
 			}
+				
+			// data packet or syn ack need to be acked
+			if (pkt_recv.flags & PKT_SYN) {
+				if (!recved_syn_ack) {
+					recv_seq = pkt_recv.seq + 1;
+					send_seq++;
+					recved_syn_ack = true;
+					fprintf(stderr, "Handshake complete!\n");
+				}
+				pkt_send.ack = pkt_recv.seq + 1;
+				pkt_send.seq = send_seq;
+				pkt_send.length = 0;
+				pkt_send.flags = PKT_ACK;
+				send_packet(sockfd, &serveraddr, &pkt_send);
+			}
 
-		}
+			if (!(pkt_recv.flags & PKT_ACK)) {
+
+			}
+	}
 		
 		// /* Send data to server */
 		// int bytes_read = read(STDIN_FILENO, &send_pkt, MSS);
@@ -104,5 +118,5 @@ int main(int argc, char *argv[]) {
 
 
 		
-	}
-}
+
+}}
