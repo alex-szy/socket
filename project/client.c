@@ -29,94 +29,136 @@ static int construct_serveraddr(struct sockaddr_in *serveraddr, int argc, char *
 	return 1;
 }
 
+
 int main(int argc, char *argv[]) {
 	// Seed the random number generator
 	srand(0);
 
 	// Create socket
 	int sockfd = make_nonblock_socket();
+	stdin_nonblock();
 
 	/* 2. Construct server address */
 	struct sockaddr_in serveraddr;
 	construct_serveraddr(&serveraddr, argc, argv);
-	
-	socklen_t serversize = sizeof(serveraddr); // Temp buffer for recvfrom API
 
-	/* 4. Create buffer to store data */
-	int BUF_SIZE = 1024;
-	uint32_t recv_seq; // seq number of the incoming packets
-	uint32_t send_seq; // seq number of outgoing packets
+	uint32_t recv_seq; 
+	// expected seq number of incoming packet, increment when received expected incoming packet, or when popping packet off from recv_q
+	uint32_t send_seq = rand() & RANDMASK; 
+	// seq number of outgoing packets, increment after sending syn or nonzero length packet
+
 	bool recved_syn_ack = false;
-	send_seq = rand() & RANDMASK;
+	bool sent_syn_ack_ack = false;
 
 	// Create the SYN packet
 	packet pkt_send = {0};
-	packet pkt_recv = {0};
 	pkt_send.length = 0;
 	pkt_send.seq = send_seq;
 	pkt_send.flags = PKT_SYN;
 
-	clock_t before = clock();
+	packet pkt_recv = {0};
 
+	// Send and receive queues
 	q_handle_t send_q = q_init();
 	q_handle_t recv_q = q_init();
-	q_push(send_q, &pkt_send);
 
-	// pure acks no consume sequence numbers
+	// Push the syn packet onto the queue and send it
+	q_push_back(send_q, &pkt_send);
+	send_packet(sockfd, &serveraddr, &pkt_send);
+	send_seq++;
+
+	int ack_count = 0;
+	uint32_t recv_ack = -1;
+
+	// Start the clock
+	clock_t before = clock();
 
 	for (;;) {
 		clock_t now = clock();
-		// Packet retransmission
-		if (now - before > CLOCKS_PER_SEC) { // 1 second timer
+		// retransmit if 1 second timer expired
+		if (now - before > CLOCKS_PER_SEC) {
 			before = now;
-			// send the packet with lowest seq number in sending buffer, which is probably the top packet
-			packet* send = q_top(send_q);
+			packet* send = q_front(send_q);
 			if (send != NULL)
 				send_packet(sockfd, &serveraddr, send);
 		}
 
-		if (recv_packet(sockfd, &serveraddr, &pkt_recv) > 0) {
-			// check for ack packet
-			if (pkt_recv.flags & PKT_ACK) {
-				// for pure acks, do not respond. only clear send packets from queue
+		if (recv_packet(sockfd, &serveraddr, &pkt_recv) <= 0) { // no packet received
+			// if handshake is done and there's space in the queue, read a packet and send as a data packet
+			if (sent_syn_ack_ack && !q_full(send_q) && read_packet_payload(&pkt_send) > 0) { 
+				pkt_send.ack = recv_seq;
+				pkt_send.seq = send_seq;
+				pkt_send.flags = 0;
+				q_push_back(send_q, &pkt_send);
+				send_seq++;
+				send_packet(sockfd, &serveraddr, &pkt_send);
+			}
+		} else { // packet received
+			if (pkt_recv.flags & PKT_ACK) { // if ack flag is set, this is ack or syn ack
 				// reset the timer
 				before = clock();
 				// pop all the packets from the q which have seq numbers less than the ack of this packet
-				// if there's nothing to acknowledge, does nothing
-				packet *pkt = q_top(send_q);
+				packet *pkt = q_front(send_q);
 				while (pkt != NULL && pkt->seq < pkt_recv.ack) {
-					q_pop(send_q);
-					pkt = q_top(send_q);
+					q_pop_front(send_q);
+					pkt = q_front(send_q);
+				}
+				// retransmit if 3 same acks in a row
+				if (pkt_recv.ack == recv_ack) {
+					ack_count++;
+					if (ack_count == 3) {
+						ack_count = 0;
+						packet* send = q_front(send_q);
+						if (send != NULL)
+							send_packet(sockfd, &serveraddr, send);
+					}
+				} else {
+					recv_ack = pkt_recv.ack;
 				}
 			}
-				
-			// data packet or syn ack need to be acked
-			if (pkt_recv.flags & PKT_SYN) {
-				if (!recved_syn_ack) {
-					recv_seq = pkt_recv.seq + 1;
-					send_seq++;
-					recved_syn_ack = true;
-					fprintf(stderr, "Handshake complete!\n");
+
+			if (pkt_recv.flags & PKT_SYN || pkt_recv.length != 0) { // syn ack packet or payload packets need to be acknowledged
+				if (pkt_recv.flags & PKT_SYN) { // syn ack packet, need to ack
+					if (!recved_syn_ack) { // first syn ack packet should set recv_seq correctly
+						recv_seq = pkt_recv.seq + 1;
+						recved_syn_ack = true;
+					}
+				} else { // packet with payload
+					if (pkt_recv.seq == recv_seq) { // write contents of packet if expected
+						write_packet_payload(&pkt_recv);
+						recv_seq++; // next packet
+
+						// loop through sorted packet buffer and pop off next packets
+						packet *pkt = q_front(recv_q);
+						while (pkt != NULL && pkt->seq == recv_seq) {
+							write_packet_payload(pkt);
+							q_pop_front(recv_q);
+							pkt = q_front(recv_q);
+							recv_seq++;
+						}
+					} else { // unexpected packet, insert into buffer
+						q_insert_keep_sorted(recv_q, &pkt_recv);
+					}
 				}
-				pkt_send.ack = pkt_recv.seq + 1;
+
+				pkt_send.ack = recv_seq;
 				pkt_send.seq = send_seq;
-				pkt_send.length = 0;
 				pkt_send.flags = PKT_ACK;
+				pkt_send.length = 0;
+
+				// If the send queue isn't full yet and we have data to send, read data into payload
+				if (recved_syn_ack && !sent_syn_ack_ack || !q_full(send_q) && read_packet_payload(&pkt_send) > 0) {
+					if (!sent_syn_ack_ack) {
+						sent_syn_ack_ack = true;
+						fprintf(stderr, "Handshake complete!\n");
+					} else {
+						q_push_back(send_q, &pkt_send);
+						send_seq++;
+					}
+				}
+
 				send_packet(sockfd, &serveraddr, &pkt_send);
 			}
-
-			if (!(pkt_recv.flags & PKT_ACK)) {
-
-			}
+		}
 	}
-		
-		// /* Send data to server */
-		// int bytes_read = read(STDIN_FILENO, &send_pkt, MSS);
-		// if (bytes_read > 0) { // Send the data (with ack, etc.)
-		// 	send(sockfd, &serveraddr, &send_pkt);
-		// } else if (bytes_read < 0 && errno != EAGAIN) die("stdin");
-
-
-		
-
-}}
+}

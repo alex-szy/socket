@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include "utils.h"
 
 void die(const char s[]) {
@@ -58,7 +59,10 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 
 int read_packet_payload(packet *pkt) {
 	int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
-	if (bytes_read >= 0) pkt->length = bytes_read;
+	if (bytes_read >= 0)
+		pkt->length = bytes_read;
+	else
+		pkt->length = 0;
 	return bytes_read;
 }
 
@@ -101,19 +105,48 @@ void q_clear(q_handle_t self) {
 	self->back = 0;
 }
 
-void q_push(q_handle_t self, packet *pkt) {
-	if (self->size == Q_SIZE) {
+void q_push_back(q_handle_t self, packet *pkt) {
+	if (q_full(self)) {
 		increment(&self->front);
 		self->size--;
-		fprintf(stderr, "Dropped packet because buffer was full\n");
+		// fprintf(stderr, "Dropped packet because buffer was full\n");
 	}
 	self->queue[self->back] = *pkt;
 	increment(&self->back);
 	self->size++;
 }
 
-packet* q_pop(q_handle_t self) {
-	if (self->size == 0)
+void q_push_front(q_handle_t self, packet *pkt) {
+	if (q_full(self)) {
+		decrement(&self->back);
+		self->size--;
+	}
+	decrement(&self->front);
+	self->queue[self->front] = *pkt;
+	self->size++;
+}
+
+void q_insert_keep_sorted(q_handle_t self, packet *pkt) {
+	// init new queue
+	// while seq number of front packet is less, put the packets into a temp queue
+	q_handle_t temp = q_init();
+	packet *front = q_front(self);
+	while (front != NULL && front->seq < pkt->seq) {
+		q_push_front(temp, q_pop_front(self));
+		front = q_front(self);
+	}
+	q_push_front(self, pkt);
+	front = q_front(temp);
+	while (front != NULL) {
+		q_push_front(self, q_pop_front(temp));
+		front = q_front(temp);
+	}
+	self->size++;
+	q_destroy(temp);
+}
+
+packet* q_pop_front(q_handle_t self) {
+	if (q_empty(self))
 		return NULL;
 	else {
 		packet* retval = &self->queue[self->front];
@@ -123,7 +156,7 @@ packet* q_pop(q_handle_t self) {
 	}
 }
 
-packet* q_top(q_handle_t self) {
+packet* q_front(q_handle_t self) {
 	if (self->size == 0)
 		return NULL;
 	else
@@ -132,4 +165,12 @@ packet* q_top(q_handle_t self) {
 
 size_t q_size(q_handle_t self) {
 	return self->size;
+}
+
+bool q_full(q_handle_t self) {
+	return q_size(self) == Q_SIZE;
+}
+
+bool q_empty(q_handle_t self) {
+	return q_size(self) == 0;
 }
