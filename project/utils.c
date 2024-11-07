@@ -30,9 +30,9 @@ void stdin_nonblock() {
 }
 
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
-	fprintf(stderr, "Sent packet: ack %08x, seq %08x, flags %x, length %d\n", pkt->ack, pkt->seq, pkt->flags, pkt->length);
+	fprintf(stderr, "Sent packet: ack %08x, seq %08x, flags %x, length %d\n", ntohl(pkt->ack), ntohl(pkt->seq), pkt->flags, ntohs(pkt->length));
 	// drop packet 75%
-	if (rand() > RANDMASK >> 1) return 1;
+	// if (rand() > RANDMASK >> 1) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
 	int did_send = sendto(sockfd, pkt, sizeof(*pkt),
 						// socket  send data   how much to send
@@ -53,21 +53,21 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 	// Error if bytes_recvd < 0 :(
 	if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
 	if (bytes_recvd > 0)
-		fprintf(stderr, "Recv packet: seq %08x, ack %08x, flags %x, length %d\n", pkt->seq, pkt->ack, pkt->flags, pkt->length);
+		fprintf(stderr, "Recv packet: seq %08x, ack %08x, flags %x, length %d\n", ntohl(pkt->seq), ntohl(pkt->ack), pkt->flags, ntohs(pkt->length));
 	return bytes_recvd;
 }
 
 int read_packet_payload(packet *pkt) {
 	int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
 	if (bytes_read >= 0)
-		pkt->length = bytes_read;
+		pkt->length = htons(bytes_read);
 	else
 		pkt->length = 0;
 	return bytes_read;
 }
 
 void write_packet_payload(packet *pkt) {
-	write(STDOUT_FILENO, &pkt->payload, pkt->length);
+	write(STDOUT_FILENO, &pkt->payload, ntohs(pkt->length));
 }
 
 struct queue_t {
@@ -92,7 +92,12 @@ static void decrement(uint8_t *idx) {
 }
 
 q_handle_t q_init() {
-	q_handle_t self = calloc(Q_SIZE, sizeof(packet));
+	q_handle_t self = malloc(Q_SIZE * sizeof(packet) + 3);
+	if (self != NULL) {
+		self->back = 0;
+		self->front = 0;
+		self->size = 0;
+	}
 	return self;
 }
 
@@ -130,6 +135,7 @@ void q_insert_keep_sorted(q_handle_t self, packet *pkt) {
 	// init new queue
 	// while seq number of front packet is less, put the packets into a temp queue
 	q_handle_t temp = q_init();
+	if (temp == NULL) die("q_insert_keep_sorted");
 	packet *front = q_front(self);
 	while (front != NULL && front->seq < pkt->seq) {
 		q_push_front(temp, q_pop_front(self));

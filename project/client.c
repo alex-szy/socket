@@ -42,9 +42,10 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in serveraddr;
 	construct_serveraddr(&serveraddr, argc, argv);
 
-	uint32_t recv_seq; 
+	// in network order
+	uint32_t recv_seq;
 	// expected seq number of incoming packet, increment when received expected incoming packet, or when popping packet off from recv_q
-	uint32_t send_seq = rand() & RANDMASK; 
+	uint32_t send_seq = htonl(rand() & RANDMASK);
 	// seq number of outgoing packets, increment after sending syn or nonzero length packet
 
 	bool recved_syn_ack = false;
@@ -61,11 +62,12 @@ int main(int argc, char *argv[]) {
 	// Send and receive queues
 	q_handle_t send_q = q_init();
 	q_handle_t recv_q = q_init();
+	if (send_q == NULL || recv_q == NULL) die("queue initialization");
 
 	// Push the syn packet onto the queue and send it
 	q_push_back(send_q, &pkt_send);
 	send_packet(sockfd, &serveraddr, &pkt_send);
-	send_seq++;
+	send_seq = htonl(ntohl(send_seq)+1);
 
 	int ack_count = 0;
 	uint32_t recv_ack = -1;
@@ -90,7 +92,7 @@ int main(int argc, char *argv[]) {
 				pkt_send.seq = send_seq;
 				pkt_send.flags = 0;
 				q_push_back(send_q, &pkt_send);
-				send_seq++;
+				send_seq = htonl(ntohl(send_seq)+1);
 				send_packet(sockfd, &serveraddr, &pkt_send);
 			}
 		} else { // packet received
@@ -126,7 +128,7 @@ int main(int argc, char *argv[]) {
 				} else { // packet with payload
 					if (pkt_recv.seq == recv_seq) { // write contents of packet if expected
 						write_packet_payload(&pkt_recv);
-						recv_seq++; // next packet
+						recv_seq = htonl(ntohl(recv_seq)+1); // next packet
 
 						// loop through sorted packet buffer and pop off next packets
 						packet *pkt = q_front(recv_q);
@@ -134,7 +136,7 @@ int main(int argc, char *argv[]) {
 							write_packet_payload(pkt);
 							q_pop_front(recv_q);
 							pkt = q_front(recv_q);
-							recv_seq++;
+							recv_seq = htonl(ntohl(recv_seq)+1);
 						}
 					} else { // unexpected packet, insert into buffer
 						q_insert_keep_sorted(recv_q, &pkt_recv);
@@ -153,7 +155,7 @@ int main(int argc, char *argv[]) {
 						fprintf(stderr, "Handshake complete!\n");
 					} else {
 						q_push_back(send_q, &pkt_send);
-						send_seq++;
+						send_seq = htonl(ntohl(send_seq)+1);
 					}
 				}
 

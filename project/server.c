@@ -50,11 +50,13 @@ int main(int argc, char *argv[]) {
 	packet pkt_recv = {};
 	packet pkt_send = {};
 
+	// in network order
 	uint32_t recv_seq;
-	uint32_t send_seq = rand() & RANDMASK;
+	uint32_t send_seq = htonl(rand() & RANDMASK);
 
 	q_handle_t send_q = q_init();
 	q_handle_t recv_q = q_init();
+	if (send_q == NULL || recv_q == NULL) die("queue initialization");
 
 	struct sockaddr_in clientaddr; // Struct to store client address
 
@@ -87,7 +89,7 @@ int main(int argc, char *argv[]) {
 				pkt_send.seq = send_seq;
 				pkt_send.flags = 0;
 				q_push_back(send_q, &pkt_send);
-				send_seq++;
+				send_seq = htonl(ntohl(send_seq)+1);
 				send_packet(sockfd, &clientaddr, &pkt_send);
 			}
 		} else { // packet received
@@ -125,7 +127,7 @@ int main(int argc, char *argv[]) {
 				} else { // packet with payload
 					if (pkt_recv.seq == recv_seq) { // write contents of packet if expected
 						write_packet_payload(&pkt_recv);
-						recv_seq++; // next packet
+						recv_seq = htonl(ntohl(recv_seq)+1); // next packet
 
 						// loop through sorted packet buffer and pop off next packets
 						packet *pkt = q_front(recv_q);
@@ -133,7 +135,7 @@ int main(int argc, char *argv[]) {
 							write_packet_payload(pkt);
 							q_pop_front(recv_q);
 							pkt = q_front(recv_q);
-							recv_seq++;
+							recv_seq = htonl(ntohl(recv_seq)+1);
 						}
 					} else { // unexpected packet, insert into buffer
 						q_insert_keep_sorted(recv_q, &pkt_recv);
@@ -152,42 +154,11 @@ int main(int argc, char *argv[]) {
 						fprintf(stderr, "Handshake complete!\n");
 					}
 					q_push_back(send_q, &pkt_send);
-					send_seq++;
+					send_seq = htonl(ntohl(send_seq)+1);
 				}
 
 				send_packet(sockfd, &clientaddr, &pkt_send);
 			}
 		}
 	}
-		
-
-		// if (bytes_recvd > 0) {
-		// 	// Write to stdout
-		//  	write(1, client_buf, bytes_recvd);
-		// 	char* client_ip = inet_ntoa(clientaddr.sin_addr);
-		// 					// "Network bytes to address string"
-		// 	int client_port = ntohs(clientaddr.sin_port); // Little endian
-		// 	fprintf(stderr, "%s:%d\n", client_ip, client_port);
-		// 	// Got the address, now ready to send
-		// 	ready_to_send = true;
-
-		// } else if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
-
-
-		// /* 7. Send data back to client */
-		// // We have not received the address yet, cannot send data
-		// if (!ready_to_send) continue;
-
-		// int bytes_read = read(STDIN_FILENO, server_buf, BUF_SIZE);
-		// if (bytes_read > 0) {
-		// 	int did_send = sendto(sockfd, server_buf, bytes_read,
-		// 						// socket  send data   how much to send
-		// 						0, (struct sockaddr*) &clientaddr,
-		// 						// flags   where to send
-		// 						sizeof(clientaddr));
-		// 	if (did_send < 0) die("send");
-
-		// } else if (bytes_read < 0 && errno != EAGAIN) die("stdin");
 }
-
-// TODO: need waiting for stdin not to interfere with socket
