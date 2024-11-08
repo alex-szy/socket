@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include "utils.h"
+#include "deque.h"
 
 
 static int construct_serveraddr(struct sockaddr_in *servaddr, int argc, char *argv[]) {
@@ -75,7 +76,7 @@ int main(int argc, char *argv[]) {
 			pkt_send.seq = send_seq;
 			send_seq = htonl(ntohl(send_seq)+1);
 			q_push_back(send_q, &pkt_send);
-			fprintf(stderr, "SBUF"); q_print(send_q);
+			q_print(send_q, "SBUF");
 			send_packet(sockfd, &clientaddr, q_front(send_q), "SEND");
 			break;
 		}
@@ -105,10 +106,9 @@ int main(int argc, char *argv[]) {
 						recv_seq = htonl(ntohl(recv_seq)+1);
 					} else {
 						q_push_front(recv_q, &pkt_recv);
-						for (packet *pkt = q_front(recv_q);pkt != NULL && pkt->seq == recv_seq;) {
+						for (packet *pkt = q_front(recv_q); pkt != NULL && pkt->seq == recv_seq; pkt = q_pop_front_get_next(recv_q)) {
 							recv_seq = htonl(ntohl(recv_seq) + ntohs(pkt->length));
-							write_pkt_to_stdout(q_pop_front(recv_q));
-							pkt = q_front(recv_q);
+							write_pkt_to_stdout(pkt);
 						}
 						pkt_send.flags = PKT_ACK;
 						pkt_send.ack = recv_seq;
@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
 							pkt_send.seq = send_seq;
 							send_seq = htonl(ntohl(send_seq)+bytes);
 							q_push_back(send_q, &pkt_send);
-							fprintf(stderr, "SBUF"); q_print(send_q);
+							q_print(send_q, "SBUF");
 							send_packet(sockfd, &clientaddr, &pkt_send, "SEND");
 						}
 					}
@@ -149,7 +149,7 @@ int main(int argc, char *argv[]) {
 					pkt_send.seq = send_seq;
 					pkt_send.flags = PKT_ACK;
 					q_push_back(send_q, &pkt_send);
-					fprintf(stderr, "SBUF"); q_print(send_q);
+					q_print(send_q, "SBUF");
 					send_seq = htonl(ntohl(send_seq)+bytes);
 					send_packet(sockfd, &clientaddr, &pkt_send, "SEND");
 				}
@@ -159,10 +159,7 @@ int main(int argc, char *argv[]) {
 			before = clock();
 			// pop all the packets from the q which have seq numbers less than the ack of this packet
 			
-			for (packet *pkt = q_front(send_q);pkt != NULL && ntohl(pkt->seq) < ntohl(pkt_recv.ack);) {
-				q_pop_front(send_q);
-				pkt = q_front(send_q);
-			}
+			for (packet *pkt = q_front(send_q); pkt != NULL && ntohl(pkt->seq) < ntohl(pkt_recv.ack); pkt = q_pop_front_get_next(send_q));
 
 			// retransmit if 3 same acks in a row
 			if (pkt_recv.ack == recv_ack) {
@@ -185,11 +182,9 @@ int main(int argc, char *argv[]) {
 
 				// loop through sorted packet buffer and pop off next packets
 				
-				for (packet *pkt = q_front(recv_q); pkt != NULL && pkt->seq == recv_seq;) {
+				for (packet *pkt = q_front(recv_q); pkt != NULL && pkt->seq == recv_seq; pkt = q_pop_front_get_next(recv_q)) {
 					write_pkt_to_stdout(pkt);
 					recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
-					q_pop_front(recv_q);
-					pkt = q_front(recv_q);
 				}
 			} else if (ntohl(pkt_recv.seq) > ntohl(recv_seq)) { // unexpected packet, insert into buffer
 				q_try_insert_keep_sorted(recv_q, &pkt_recv);
@@ -208,7 +203,7 @@ int main(int argc, char *argv[]) {
 				if (bytes > 0) {
 					pkt_send.seq = send_seq;
 					q_push_back(send_q, &pkt_send);
-					fprintf(stderr, "SBUF"); q_print(send_q);
+					q_print(send_q, "SBUF");
 					send_seq = htonl(ntohl(send_seq)+bytes);
 				}
 			}

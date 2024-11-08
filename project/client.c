@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include "utils.h"
+#include "deque.h"
 
 
 static int construct_serveraddr(struct sockaddr_in *serveraddr, int argc, char *argv[]) {
@@ -104,11 +105,9 @@ int main(int argc, char *argv[]) {
 				// reset the timer
 				before = clock();
 				// pop all the packets from the q which have seq numbers less than the ack of this packet
-				packet *pkt = q_front(send_q);
-				while (pkt != NULL && ntohl(pkt->seq) < ntohl(pkt_recv.ack)) {
-					q_pop_front(send_q);
-					pkt = q_front(send_q);
-				}
+				
+				for (packet *pkt = q_front(send_q); pkt != NULL && ntohl(pkt->seq) < ntohl(pkt_recv.ack); pkt = q_pop_front_get_next(send_q));
+
 				// retransmit if 3 same acks in a row
 				if (pkt_recv.ack == recv_ack) {
 					ack_count++;
@@ -135,16 +134,13 @@ int main(int argc, char *argv[]) {
 						recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt_recv.length)); // next packet
 
 						// loop through sorted packet buffer and pop off next packets
-						packet *pkt = q_front(recv_q);
-						while (pkt != NULL && pkt->seq == recv_seq) {
-							write_pkt_to_stdout(pkt);
+						for (packet *pkt = q_front(recv_q); pkt != NULL && pkt->seq == recv_seq; pkt = q_pop_front_get_next(recv_q)) {
 							recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
-							q_pop_front(recv_q);
-							pkt = q_front(recv_q);
+							write_pkt_to_stdout(pkt);
 						}
 					} else if (ntohl(pkt_recv.seq) > ntohl(recv_seq)) { // unexpected unacked packet, insert into buffer
 						q_try_insert_keep_sorted(recv_q, &pkt_recv);
-						fprintf(stderr, "RBUF"); q_print(recv_q);
+						q_print(recv_q, "RBUF");
 					}
 				}
 
