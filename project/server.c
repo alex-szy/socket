@@ -47,8 +47,8 @@ int main(int argc, char *argv[]) {
 	bind_socket(sockfd, argc, argv);
 	
 	/* 4. Create the send and receive packets */
-	packet pkt_recv = {};
-	packet pkt_send = {};
+	packet pkt_recv = {0};
+	packet pkt_send = {0};
 
 	// in network order
 	uint32_t recv_seq;
@@ -59,9 +59,6 @@ int main(int argc, char *argv[]) {
 	if (send_q == NULL || recv_q == NULL) die("queue initialization");
 
 	struct sockaddr_in clientaddr; // Struct to store client address
-
-	bool ready_to_send = false;
-	bool syn = false;
 
 	int ack_count = 0;
 	uint32_t recv_ack = -1;
@@ -96,12 +93,13 @@ int main(int argc, char *argv[]) {
 				send_packet(sockfd, &clientaddr, q_front(send_q), "SEND"); // ack, not retransmit
 			} else if (pkt_recv.flags & PKT_ACK) { // syn ack ack packet, may have payload
 				// TODO: still send ack if seq has already been received
-				if (ntohl(pkt_recv.seq) > ntohl(recv_seq)) { // not the packet we want
+				if (pkt_recv.seq != recv_seq) { // not the packet we want
 					if (pkt_recv.length != 0) {
+						if (ntohl(pkt_recv.seq) > ntohl(recv_seq))
+							q_try_insert_keep_sorted(recv_q, &pkt_recv);
 						send_packet(sockfd, &clientaddr, q_front(send_q), "SEND"); // ack, not retransmit
-						q_try_insert_keep_sorted(recv_q, &pkt_recv);
 					}
-				} else if (pkt_recv.seq == recv_seq) {
+				} else {
 					q_pop_front(send_q);
 					if (pkt_recv.length == 0) { // incoming zero length
 						recv_seq = htonl(ntohl(recv_seq)+1);
@@ -189,9 +187,9 @@ int main(int argc, char *argv[]) {
 				
 				for (packet *pkt = q_front(recv_q); pkt != NULL && pkt->seq == recv_seq;) {
 					write_pkt_to_stdout(pkt);
+					recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
 					q_pop_front(recv_q);
 					pkt = q_front(recv_q);
-					recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
 				}
 			} else if (ntohl(pkt_recv.seq) > ntohl(recv_seq)) { // unexpected packet, insert into buffer
 				q_try_insert_keep_sorted(recv_q, &pkt_recv);

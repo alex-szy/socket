@@ -49,7 +49,7 @@ void stdin_nonblock() {
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt, const char* str) {
 	print_packet(pkt, str);
 	// drop packet 75%
-	// if (rand() > RANDMASK >> 1) return 1;
+	if (rand() > RANDMASK) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
 	int did_send = sendto(sockfd, pkt, sizeof(*pkt),
 						// socket  send data   how much to send
@@ -70,7 +70,7 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 	// Error if bytes_recvd < 0 :(
 	if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
 	if (bytes_recvd > 0)
-		print_packet(pkt, "RECV");		
+		print_packet(pkt, "RECV");
 	return bytes_recvd;
 }
 
@@ -95,16 +95,16 @@ struct queue_t {
 	uint8_t capacity;
 };
 
-static uint8_t increment(uint8_t idx, uint8_t capacity) {
-	if (idx == capacity - 1)
+static uint8_t increment(q_handle_t self, uint8_t idx) {
+	if (idx == self->capacity - 1)
 		return 0;
 	else
 		return ++idx;
 }
 
-static uint8_t decrement(uint8_t idx, uint8_t capacity) {
+static uint8_t decrement(q_handle_t self, uint8_t idx) {
 	if (idx == 0)
-		return capacity - 1;
+		return self->capacity - 1;
 	else
 		return --idx;
 }
@@ -136,45 +136,38 @@ void q_clear(q_handle_t self) {
 	self->size = 0;
 }
 
-void q_push_back(q_handle_t self, packet *pkt) {
-	if (q_full(self)) {
-		self->front = increment(self->front, self->capacity);
-		self->size--;
-		fprintf(stderr, "Dropped packet because buffer was full\n");
-	}
+bool q_push_back(q_handle_t self, packet *pkt) {
+	if (q_full(self)) return false;
 	self->queue[self->back] = *pkt;
-	self->back = increment(self->back, self->capacity);
+	self->back = increment(self, self->back);
 	self->size++;
+	return true;
 }
 
-void q_push_front(q_handle_t self, packet *pkt) {
-	if (q_full(self)) {
-		self->back = decrement(self->back, self->capacity);
-		self->size--;
-		fprintf(stderr, "Dropped packet because buffer was full\n");
-	}
-	self->front = decrement(self->front, self->capacity);
+bool q_push_front(q_handle_t self, packet *pkt) {
+	if (q_full(self)) return false;
+	self->front = decrement(self, self->front);
 	self->queue[self->front] = *pkt;
 	self->size++;
+	return true;
 }
 
-void q_try_insert_keep_sorted(q_handle_t self, packet *pkt) {
-	if (q_full(self)) return;
-	// init new queue
-	// while seq number of front packet is less, put the packets into a temp queue
+bool q_try_insert_keep_sorted(q_handle_t self, packet *pkt) {
+	if (q_full(self)) return false;
 	// Prevent duplicates
-	for (uint8_t i = self->front; i != self->back; i = increment(i, self->capacity)) {
-		if (self->queue[i].seq == pkt->seq) return;
+	for (uint8_t i = self->front; i != self->back; i = increment(self, i)) {
+		if (self->queue[i].seq == pkt->seq) return false;
 	}
-	self->front = decrement(self->front, self->capacity);
+	self->front = decrement(self, self->front);
 	uint8_t curr = self->front;
-	for (uint8_t i = 0; i < self->size; curr = increment(curr, self->capacity), i++) {
-		uint8_t next = increment(curr, self->capacity);
+	for (uint8_t i = 0; i < self->size; curr = increment(self, curr), i++) {
+		uint8_t next = increment(self, curr);
 		if (ntohl(self->queue[next].seq) > ntohl(pkt->seq)) break;
 		self->queue[curr] = self->queue[next];
 	}
 	self->size++;
 	self->queue[curr] = *pkt;
+	return true;
 }
 
 packet* q_pop_front(q_handle_t self) {
@@ -182,7 +175,7 @@ packet* q_pop_front(q_handle_t self) {
 		return NULL;
 	else {
 		packet* retval = &self->queue[self->front];
-		self->front = increment(self->front, self->capacity);
+		self->front = increment(self, self->front);
 		self->size--;
 		return retval;
 	}
@@ -200,15 +193,15 @@ size_t q_size(q_handle_t self) {
 }
 
 bool q_full(q_handle_t self) {
-	return q_size(self) == self->capacity;
+	return self->size == self->capacity;
 }
 
 bool q_empty(q_handle_t self) {
-	return q_size(self) == 0;
+	return self->size == 0;
 }
 
 void q_print(q_handle_t self) {
-	for (uint8_t i = 0, j = self->front; i < self->size; i++, j = increment(j, self->capacity)) {
+	for (uint8_t i = 0, j = self->front; i < self->size; i++, j = increment(self, j)) {
 		fprintf(stderr, " %u", ntohl(self->queue[j].seq));
 	}
 	fprintf(stderr, "\n");

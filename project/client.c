@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
 
 	// Send and receive queues
 	q_handle_t send_q = q_init(20);
-	q_handle_t recv_q = q_init(10);
+	q_handle_t recv_q = q_init(20);
 	if (send_q == NULL || recv_q == NULL) die("queue initialization");
 
 	// Push the syn packet onto the queue and send it
@@ -138,12 +138,13 @@ int main(int argc, char *argv[]) {
 						packet *pkt = q_front(recv_q);
 						while (pkt != NULL && pkt->seq == recv_seq) {
 							write_pkt_to_stdout(pkt);
+							recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
 							q_pop_front(recv_q);
 							pkt = q_front(recv_q);
-							recv_seq = htonl(ntohl(recv_seq)+ntohs(pkt->length));
 						}
 					} else if (ntohl(pkt_recv.seq) > ntohl(recv_seq)) { // unexpected unacked packet, insert into buffer
 						q_try_insert_keep_sorted(recv_q, &pkt_recv);
+						fprintf(stderr, "RBUF"); q_print(recv_q);
 					}
 				}
 

@@ -5,3 +5,5 @@ project/*.out
 project/project
 results
 .vscode/
+test.c
+pseudo
