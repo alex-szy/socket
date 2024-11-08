@@ -48,8 +48,6 @@ void stdin_nonblock() {
 
 int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt, const char* str) {
 	print_packet(pkt, str);
-	// drop packet 75%
-	if (rand() > RANDMASK) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
 	int did_send = sendto(sockfd, pkt, sizeof(*pkt),
 						// socket  send data   how much to send
