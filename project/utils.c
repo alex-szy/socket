@@ -8,6 +8,23 @@
 #include <stdbool.h>
 #include "utils.h"
 
+static void print_packet(packet *pkt, const char* op) {
+	fprintf(stderr, "%s %d ACK %d SIZE %d FLAGS", op, ntohl(pkt->seq), ntohl(pkt->ack), ntohs(pkt->length));
+	switch (pkt->flags) {
+		case PKT_SYN:
+			fprintf(stderr, " SYN\n");
+			break;
+		case PKT_ACK:
+			fprintf(stderr, " ACK\n");
+			break;
+		case PKT_ACK | PKT_SYN:
+			fprintf(stderr, " SYN ACK\n");
+			break;
+		default:
+			fprintf(stderr, " NONE\n");
+	}
+}
+
 void die(const char s[]) {
 	perror(s);
 	exit(errno);
@@ -29,8 +46,8 @@ void stdin_nonblock() {
 	if (stdin_nonblock < 0) die("non-block stdin");
 }
 
-int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
-	fprintf(stderr, "Sent packet: ack %08x, seq %08x, flags %x, length %d\n", ntohl(pkt->ack), ntohl(pkt->seq), pkt->flags, ntohs(pkt->length));
+int send_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt, const char* str) {
+	print_packet(pkt, str);
 	// drop packet 75%
 	// if (rand() > RANDMASK >> 1) return 1;
 	socklen_t serversize = sizeof(*serveraddr);
@@ -53,11 +70,11 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
 	// Error if bytes_recvd < 0 :(
 	if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
 	if (bytes_recvd > 0)
-		fprintf(stderr, "Recv packet: seq %08x, ack %08x, flags %x, length %d\n", ntohl(pkt->seq), ntohl(pkt->ack), pkt->flags, ntohs(pkt->length));
+		print_packet(pkt, "RECV");		
 	return bytes_recvd;
 }
 
-int read_packet_payload(packet *pkt) {
+int read_stdin_to_pkt(packet *pkt) {
 	int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
 	if (bytes_read >= 0)
 		pkt->length = htons(bytes_read);
@@ -66,89 +83,98 @@ int read_packet_payload(packet *pkt) {
 	return bytes_read;
 }
 
-void write_packet_payload(packet *pkt) {
+void write_pkt_to_stdout(packet *pkt) {
 	write(STDOUT_FILENO, &pkt->payload, ntohs(pkt->length));
 }
 
 struct queue_t {
-	packet queue[Q_SIZE];
+	packet *queue;
 	uint8_t front;
 	uint8_t back;
 	uint8_t size;
+	uint8_t capacity;
 };
 
-static void increment(uint8_t *idx) {
-	if (*idx == Q_SIZE - 1)
-		*idx = 0;
+static uint8_t increment(uint8_t idx, uint8_t capacity) {
+	if (idx == capacity - 1)
+		return 0;
 	else
-		(*idx)++;
+		return ++idx;
 }
 
-static void decrement(uint8_t *idx) {
-	if (*idx == 0)
-		*idx = Q_SIZE - 1;
+static uint8_t decrement(uint8_t idx, uint8_t capacity) {
+	if (idx == 0)
+		return capacity - 1;
 	else
-		(*idx)--;
+		return --idx;
 }
 
-q_handle_t q_init() {
-	q_handle_t self = malloc(Q_SIZE * sizeof(packet) + 3);
+q_handle_t q_init(uint8_t capacity) {
+	q_handle_t self = malloc(sizeof(packet*) + 4);
 	if (self != NULL) {
 		self->back = 0;
 		self->front = 0;
 		self->size = 0;
+		self->capacity = capacity;
+		self->queue = malloc(sizeof(packet) * capacity);
+		if (self->queue == NULL) {
+			free(self);
+			self = NULL;
+		}
 	}
 	return self;
 }
 
 void q_destroy(q_handle_t self) {
+	free(self->queue);
 	free(self);
 }
 
 void q_clear(q_handle_t self) {
 	self->front = 0;
 	self->back = 0;
+	self->size = 0;
 }
 
 void q_push_back(q_handle_t self, packet *pkt) {
 	if (q_full(self)) {
-		increment(&self->front);
+		self->front = increment(self->front, self->capacity);
 		self->size--;
-		// fprintf(stderr, "Dropped packet because buffer was full\n");
+		fprintf(stderr, "Dropped packet because buffer was full\n");
 	}
 	self->queue[self->back] = *pkt;
-	increment(&self->back);
+	self->back = increment(self->back, self->capacity);
 	self->size++;
 }
 
 void q_push_front(q_handle_t self, packet *pkt) {
 	if (q_full(self)) {
-		decrement(&self->back);
+		self->back = decrement(self->back, self->capacity);
 		self->size--;
+		fprintf(stderr, "Dropped packet because buffer was full\n");
 	}
-	decrement(&self->front);
+	self->front = decrement(self->front, self->capacity);
 	self->queue[self->front] = *pkt;
 	self->size++;
 }
 
-void q_insert_keep_sorted(q_handle_t self, packet *pkt) {
+void q_try_insert_keep_sorted(q_handle_t self, packet *pkt) {
+	if (q_full(self)) return;
 	// init new queue
 	// while seq number of front packet is less, put the packets into a temp queue
-	q_handle_t temp = q_init();
-	if (temp == NULL) die("q_insert_keep_sorted");
-	packet *front = q_front(self);
-	while (front != NULL && front->seq < pkt->seq) {
-		q_push_front(temp, q_pop_front(self));
-		front = q_front(self);
+	// Prevent duplicates
+	for (uint8_t i = self->front; i != self->back; i = increment(i, self->capacity)) {
+		if (self->queue[i].seq == pkt->seq) return;
 	}
-	q_push_front(self, pkt);
-	front = q_front(temp);
-	while (front != NULL) {
-		q_push_front(self, q_pop_front(temp));
-		front = q_front(temp);
+	self->front = decrement(self->front, self->capacity);
+	uint8_t curr = self->front;
+	for (uint8_t i = 0; i < self->size; curr = increment(curr, self->capacity), i++) {
+		uint8_t next = increment(curr, self->capacity);
+		if (ntohl(self->queue[next].seq) > ntohl(pkt->seq)) break;
+		self->queue[curr] = self->queue[next];
 	}
 	self->size++;
-	q_destroy(temp);
+	self->queue[curr] = *pkt;
 }
 
 packet* q_pop_front(q_handle_t self) {
@@ -156,7 +182,7 @@ packet* q_pop_front(q_handle_t self) {
 		return NULL;
 	else {
 		packet* retval = &self->queue[self->front];
-		increment(&self->front);
+		self->front = increment(self->front, self->capacity);
 		self->size--;
 		return retval;
 	}
@@ -174,9 +200,16 @@ size_t q_size(q_handle_t self) {
 }
 
 bool q_full(q_handle_t self) {
-	return q_size(self) == Q_SIZE;
+	return q_size(self) == self->capacity;
 }
 
 bool q_empty(q_handle_t self) {
 	return q_size(self) == 0;
+}
+
+void q_print(q_handle_t self) {
+	for (uint8_t i = 0, j = self->front; i < self->size; i++, j = increment(j, self->capacity)) {
+		fprintf(stderr, " %u", ntohl(self->queue[j].seq));
+	}
+	fprintf(stderr, "\n");
 }
