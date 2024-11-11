@@ -1,5 +1,5 @@
-#ifndef COMMONH
-#define COMMONH
+#ifndef PROJECT_COMMON_H_
+#define PROJECT_COMMON_H_
 
 #include <time.h>
 #include "utils.h"
@@ -19,7 +19,11 @@ typedef struct socketparams {
     struct sockaddr_in addr;
 } params;
 
-void p_init(params *p, int q_capacity, int argc, char *argv[], void (*construct_addr)(struct sockaddr_in*, int, char*[]));
+void p_init(params *p,
+            int q_capacity,
+            int argc,
+            char *argv[],
+            void (*construct_addr)(struct sockaddr_in*, int, char*[]));
 
 void p_retransmit_on_timeout(params *p);
 bool p_send_payload_ack(params *p);
@@ -30,4 +34,4 @@ void p_send_empty_ack(params *p);
 
 void p_listen(params *p);
 
-#endif
+#endif  // PROJECT_COMMON_H_

@@ -1,5 +1,5 @@
-#ifndef DEQUEH
-#define DEQUEH
+#ifndef PROJECT_DEQUE_H_
+#define PROJECT_DEQUE_H_
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -21,4 +21,4 @@ bool q_full(q_handle_t self);
 bool q_empty(q_handle_t self);
 void q_print(q_handle_t self, const char *str);
 
-#endif
+#endif  // PROJECT_DEQUE_H_
