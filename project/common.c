@@ -24,7 +24,7 @@ void p_init(params *p, int q_capacity, int argc, char *argv[], void (*construct_
         construct_addr(&p->addr, argc, argv);
 }
 
-/* Checks for a 1 second timeout since timer was last rest, and sends first packet in the send buffer, if any. */
+/* Checks for a 1 second timeout since timer was last reset, and sends first packet in the send buffer, if any. */
 void p_retransmit_on_timeout(params *p) {
     clock_t now = clock();
     // Packet retransmission
@@ -38,7 +38,8 @@ void p_retransmit_on_timeout(params *p) {
     }
 }
 
-bool p_send_packet_from_stdin(params *p) {
+/* Checks if send queue is full. If not full and there is data in stdin, send a packet with the data and return true. Else do nothing and return false. */
+bool p_send_payload_ack(params *p) {
     if (q_full(p->send_q))
         return false;
     int bytes = read_stdin_to_pkt(&p->pkt_send);
@@ -54,6 +55,7 @@ bool p_send_packet_from_stdin(params *p) {
     return true;
 }
 
+/* Check if the received ack is a duplicate. If 3 in a row, retransmit the first packet in the send buffer. */
 void p_retransmit_on_duplicate_ack(params *p) {
     // retransmit if 3 same acks in a row
     if (p->pkt_recv.ack == p->recv_ack) {
@@ -69,8 +71,8 @@ void p_retransmit_on_duplicate_ack(params *p) {
     }
 }
 
-/* Handles the incoming data packet. Returns true if printed out, and false if buffered. */
-bool p_handle_data_packet(params *p) {
+/* Handles the incoming data packet. If the packet is expected, write to stdout, check the received queue for the next expected packets and does the same. Else if packet has not been acked, try to buffer it (do nothing if buffer is full). If the packet has already been acked, do nothing. */
+void p_handle_data_packet(params *p) {
     if (p->pkt_recv.seq == p->recv_seq) { // write contents of packet if expected
         write_pkt_to_stdout(&p->pkt_recv);
         p->recv_seq = htonl(ntohl(p->recv_seq)+ntohs(p->pkt_recv.length)); // next packet
@@ -83,19 +85,24 @@ bool p_handle_data_packet(params *p) {
             write_pkt_to_stdout(pkt);
             p->recv_seq = htonl(ntohl(p->recv_seq)+ntohs(pkt->length));
         }
-        return true;
-    } else if (ntohl(p->pkt_recv.seq) > ntohl(p->recv_seq)) { // unexpected packet, insert into buffer
+    } else if (ntohl(p->pkt_recv.seq) > ntohl(p->recv_seq)) { // future packet, try to buffer
         q_try_insert_keep_sorted(p->recv_q, &p->pkt_recv);
-        return false;
+        q_print(p->recv_q, "RBUF");
     }
 }
 
-void p_clear_acked_packets_from_sbuf(params *p) {
+/* Pops off all packets from send buffer that have a lower seq number than the incoming ack. Returns true if any packets were popped. */
+bool p_clear_acked_packets_from_sbuf(params *p) {
+    bool flag = false;
     packet *pkt = q_front(p->send_q);
-    while (pkt != NULL && ntohl(pkt->seq) < ntohl(p->pkt_recv.ack))
+    while (pkt != NULL && ntohl(pkt->seq) < ntohl(p->pkt_recv.ack)) {
+        flag = true;
         pkt = q_pop_front_get_next(p->send_q);
+    }
+    return flag;
 }
 
+/* Sends an ack packet without any data. Does not increment the send sequence number. */
 void p_send_empty_ack(params *p) {
     p->pkt_send.flags = PKT_ACK;
     p->pkt_send.ack = p->recv_seq;
@@ -104,25 +111,27 @@ void p_send_empty_ack(params *p) {
     send_packet(p->sockfd, &p->addr, &p->pkt_send, "SEND");
 }
 
+/* Called in the main loop of client and server. Handles the data transmission between the sender and receiver. */
 void p_listen(params *p) {
-    p_retransmit_on_timeout(p);
-    if (recv_packet(p->sockfd, &p->addr, &p->pkt_recv) <= 0) {
-        p_send_packet_from_stdin(p);
-    } else { // packet received
-        // reset the timer
-        p->before = clock();
+    for (;;) {
+        p_retransmit_on_timeout(p);
+        if (recv_packet(p->sockfd, &p->addr, &p->pkt_recv) <= 0) {
+            p_send_payload_ack(p);
+        } else { // packet received
+            p_retransmit_on_duplicate_ack(p);
 
-        p_retransmit_on_duplicate_ack(p);
+            if (p_clear_acked_packets_from_sbuf(p)) // reset the timer if new ack received
+                p->before = clock();
 
-        p_clear_acked_packets_from_sbuf(p);
+            if (p->pkt_recv.length == 0) // no further handling for empty ack packets
+                continue;
 
-        if (p->pkt_recv.length == 0) return; // only payload packets need to be acknowledged
+            p_handle_data_packet(p);
 
-        p_handle_data_packet(p);
-
-        // If the send queue isn't full yet and we have data to send, read data into payload
-        // Or if we're responding to a syn packet
-        if (!p_send_packet_from_stdin(p))
-            p_send_empty_ack(p);
+            // If the send queue isn't full yet and we have data to send, read data into payload
+            // Or if we're responding to a syn packet
+            if (!p_send_payload_ack(p))
+                p_send_empty_ack(p);
+        }
     }
 }

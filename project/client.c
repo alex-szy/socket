@@ -54,18 +54,23 @@ int main(int argc, char *argv[]) {
 		p_retransmit_on_timeout(&p);
 		if (recv_packet(p.sockfd, &p.addr, &p.pkt_recv) <= 0)
 			continue;
-		p.before = clock();
 		if (p.pkt_recv.flags & PKT_ACK && p.pkt_recv.flags & PKT_SYN) { // syn ack packet
-			p_clear_acked_packets_from_sbuf(&p);
+			if (p_clear_acked_packets_from_sbuf(&p)) // reset the clock if new ack received
+				p.before = clock();
 			p.recv_seq = htonl(ntohl(p.pkt_recv.seq)+1);
-			if (!p_send_packet_from_stdin(&p))
-				p_send_empty_ack(&p);
+			if (!p_send_payload_ack(&p)) {
+				p.pkt_send.flags = PKT_ACK;
+				p.pkt_send.ack = p.recv_seq;
+				p.pkt_send.seq = p.send_seq;
+				p.pkt_send.length = 0;
+				send_packet(p.sockfd, &p.addr, &p.pkt_send, "SEND");
+				p.send_seq = htonl(ntohl(p.send_seq)+1);
+			}
 			break;
 		} else {
 			send_packet(p.sockfd, &p.addr, q_front(p.send_q), "SEND"); // ack, not retransmit
 		}
 	}
 
-	for (;;)
-		p_listen(&p);
+	p_listen(&p);
 }
