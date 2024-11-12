@@ -76,7 +76,7 @@ bool q_try_insert_keep_sorted(q_handle_t self, packet *pkt) {
     uint8_t curr = self->front;
     for (uint8_t i = 0; i < self->size; curr = increment(self, curr), i++) {
         uint8_t next = increment(self, curr);
-        if (ntohl(self->queue[next].seq) > ntohl(pkt->seq)) break;
+        if (self->queue[next].seq > pkt->seq) break;
         self->queue[curr] = self->queue[next];
     }
     self->size++;
@@ -124,7 +124,7 @@ void q_print(q_handle_t self, const char *str) {
     for (uint8_t i = 0, j = self->front;
         i < self->size; i++,
         j = increment(self, j)) {
-        fprintf(stderr, " %u", ntohl(self->queue[j].seq));
+        fprintf(stderr, " %u", self->queue[j].seq);
     }
     fprintf(stderr, "\n");
 }

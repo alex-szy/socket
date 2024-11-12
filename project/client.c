@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     // Push the syn packet onto the queue and send it
     q_push_back(p.send_q, &p.pkt_send);
     send_packet(p.sockfd, &p.addr, &p.pkt_send, "SEND");
-    p.send_seq = htonl(ntohl(p.send_seq)+1);
+    p.send_seq++;
 
     for (;;) {  // wait for syn ack
         p_retransmit_on_timeout(&p);
@@ -59,14 +59,14 @@ int main(int argc, char *argv[]) {
         if (p.pkt_recv.flags & PKT_ACK && p.pkt_recv.flags & PKT_SYN) {  // syn ack packet
             if (p_clear_acked_packets_from_sbuf(&p))  // reset the clock if new ack received
                 p.before = clock();
-            p.recv_seq = htonl(ntohl(p.pkt_recv.seq)+1);
+            p.recv_seq = p.pkt_recv.seq + 1;
             if (!p_send_payload_ack(&p)) {
                 p.pkt_send.flags = PKT_ACK;
                 p.pkt_send.ack = p.recv_seq;
                 p.pkt_send.seq = p.send_seq;
                 p.pkt_send.length = 0;
                 send_packet(p.sockfd, &p.addr, &p.pkt_send, "SEND");
-                p.send_seq = htonl(ntohl(p.send_seq)+1);
+                p.send_seq++;
             }
             break;
         } else {

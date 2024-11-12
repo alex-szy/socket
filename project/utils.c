@@ -10,7 +10,7 @@
 
 static void print_packet(packet *pkt, const char* op) {
     fprintf(stderr, "%s %d ACK %d SIZE %d FLAGS",
-            op, ntohl(pkt->seq), ntohl(pkt->ack), ntohs(pkt->length));
+            op, pkt->seq, pkt->ack, pkt->length);
     switch (pkt->flags) {
         case PKT_SYN:
             fprintf(stderr, " SYN\n");
@@ -53,7 +53,11 @@ int send_packet(int sockfd,
                 const char* str) {
     print_packet(pkt, str);
     socklen_t serversize = sizeof(*serveraddr);
-    int did_send = sendto(sockfd, pkt, sizeof(*pkt),
+    packet pkt_send = *pkt;
+    pkt_send.seq = htonl(pkt_send.seq);
+    pkt_send.ack = htonl(pkt_send.ack);
+    pkt_send.length = htons(pkt_send.length);
+    int did_send = sendto(sockfd, &pkt_send, sizeof(pkt_send),
                         // socket  send data   how much to send
                             0, (struct sockaddr*) serveraddr,
                         // flags   where to send
@@ -71,20 +75,24 @@ int recv_packet(int sockfd, struct sockaddr_in *serveraddr, packet *pkt) {
                                 &serversize);
     // Error if bytes_recvd < 0 :(
     if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
-    if (bytes_recvd > 0)
+    if (bytes_recvd > 0) {
+        pkt->seq = ntohl(pkt->seq);
+        pkt->ack = ntohl(pkt->ack);
+        pkt->length = ntohs(pkt->length);
         print_packet(pkt, "RECV");
+    }
     return bytes_recvd;
 }
 
 int read_stdin_to_pkt(packet *pkt) {
     int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
     if (bytes_read >= 0)
-        pkt->length = htons(bytes_read);
+        pkt->length = bytes_read;
     else
         pkt->length = 0;
     return bytes_read;
 }
 
 void write_pkt_to_stdout(packet *pkt) {
-    write(STDOUT_FILENO, &pkt->payload, ntohs(pkt->length));
+    write(STDOUT_FILENO, &pkt->payload, pkt->length);
 }

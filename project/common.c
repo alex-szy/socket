@@ -16,7 +16,7 @@ void p_init(params *p,
     memset(&p->pkt_send, 0, sizeof(packet));
     memset(&p->pkt_recv, 0, sizeof(packet));
     p->recv_seq = 0;
-    p->send_seq = htonl(rand() & RANDMASK);
+    p->send_seq = rand() & RANDMASK;
     p->recv_q = q_init(q_capacity);
     p->send_q = q_init(q_capacity);
     if (p->recv_q == NULL || p->send_q == NULL)
@@ -57,7 +57,7 @@ bool p_send_payload_ack(params *p) {
     p->pkt_send.flags = PKT_ACK;
     q_push_back(p->send_q, &p->pkt_send);
     q_print(p->send_q, "SBUF");
-    p->send_seq = htonl(ntohl(p->send_seq)+bytes);
+    p->send_seq += bytes;
     send_packet(p->sockfd, &p->addr, &p->pkt_send, "SEND");
     return true;
 }
@@ -86,7 +86,7 @@ If the packet has already been acked, do nothing. */
 void p_handle_data_packet(params *p) {
     if (p->pkt_recv.seq == p->recv_seq) {  // write contents of packet if expected
         write_pkt_to_stdout(&p->pkt_recv);
-        p->recv_seq = htonl(ntohl(p->recv_seq)+ntohs(p->pkt_recv.length));  // next packet
+        p->recv_seq += p->pkt_recv.length;  // next packet
 
         // loop through sorted packet buffer and pop off next packets
 
@@ -94,9 +94,9 @@ void p_handle_data_packet(params *p) {
                 pkt != NULL && pkt->seq == p->recv_seq;
                 pkt = q_pop_front_get_next(p->recv_q)) {
             write_pkt_to_stdout(pkt);
-            p->recv_seq = htonl(ntohl(p->recv_seq)+ntohs(pkt->length));
+            p->recv_seq += pkt->length;
         }
-    } else if (ntohl(p->pkt_recv.seq) > ntohl(p->recv_seq)) {  // future packet, try to buffer
+    } else if (p->pkt_recv.seq > p->recv_seq) {  // future packet, try to buffer
         q_try_insert_keep_sorted(p->recv_q, &p->pkt_recv);
         q_print(p->recv_q, "RBUF");
     }
@@ -107,7 +107,7 @@ Returns true if any packets were popped. */
 bool p_clear_acked_packets_from_sbuf(params *p) {
     bool flag = false;
     packet *pkt = q_front(p->send_q);
-    while (pkt != NULL && ntohl(pkt->seq) < ntohl(p->pkt_recv.ack)) {
+    while (pkt != NULL && pkt->seq < p->pkt_recv.ack) {
         flag = true;
         pkt = q_pop_front_get_next(p->send_q);
     }

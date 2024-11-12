@@ -56,11 +56,11 @@ int main(int argc, char *argv[]) {
         if (recv_packet(p.sockfd, &p.addr, &p.pkt_recv) <= 0)
             continue;
         if (p.pkt_recv.flags & PKT_SYN) {
-            p.recv_seq = htonl(ntohl(p.pkt_recv.seq)+1);
+            p.recv_seq = p.pkt_recv.seq + 1;
             p.pkt_send.flags = PKT_ACK | PKT_SYN;
             p.pkt_send.ack = p.recv_seq;
             p.pkt_send.seq = p.send_seq;
-            p.send_seq = htonl(ntohl(p.send_seq)+1);
+            p.send_seq++;
             q_push_back(p.send_q, &p.pkt_send);
             q_print(p.send_q, "SBUF");
             send_packet(p.sockfd, &p.addr, q_front(p.send_q), "SEND");
@@ -79,7 +79,7 @@ int main(int argc, char *argv[]) {
             if (p_clear_acked_packets_from_sbuf(&p))
                 p.before = clock();
             if (p.pkt_recv.length == 0) {  // incoming zero length syn ack ack
-                p.recv_seq = htonl(ntohl(p.recv_seq)+1);
+                p.recv_seq++;
             } else {
                 p_handle_data_packet(&p);
                 p_send_payload_ack(&p);
