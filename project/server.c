@@ -171,6 +171,7 @@ int main(int argc, char *argv[])
                             (struct sockaddr *)&client_addr, sizeof(client_addr));
                      // send_win.last_ack_time = time(NULL);
                   }
+                  dup_ack = 0;
                }
             }
             else
