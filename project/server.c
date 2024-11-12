@@ -119,12 +119,19 @@ int main(int argc, char *argv[])
    uint32_t server_isn = rand() % (UINT32_MAX / 2);
    packet syn_ack_pkt = create_packet(server_isn, recv_pkt.seq + 1, 0, 3);
    packet_to_network(&syn_ack_pkt);
+   print_diag(&syn_ack_pkt, SEND);
    sendto(sockfd, &syn_ack_pkt, sizeof(syn_ack_pkt), 0,
           (struct sockaddr *)&client_addr, client_addr_len);
 
    send_win.base_seq = server_isn + 1;
    send_win.next_seq = server_isn + 1;
    recv_win.expect_seq = recv_pkt.seq + 1;
+
+   bool handshake_complete = false;
+
+   clock_t clk = clock();
+   uint32_t last_ack_received = 0;
+   int dup_ack = 0;
 
    // RECEIVE ACK WHILE BEGINNING TO SEND DATA OVER
    while (1)
@@ -146,14 +153,44 @@ int main(int argc, char *argv[])
          if (recv_pkt.flags & 2)
          { // ACK flag set
             // fprintf(stderr, "acker");
-            process_ack(&send_win, recv_pkt.ack, sockfd, client_addr);
+            if (process_ack(&send_win, recv_pkt.ack, sockfd, client_addr))
+               clk = clock();
+            if (recv_pkt.ack == last_ack_received)
+            {
+               dup_ack++;
+               if (dup_ack >= 3)
+               {
+                  packet *retx_pkt = get_retransmit_packet(&send_win);
+                  if (retx_pkt)
+                  {
+                     retx_pkt->ack = recv_win.expect_seq;
+                     packet send_pkt = *retx_pkt;
+                     packet_to_network(&send_pkt);
+                     print_diag(&send_pkt, DUPA);
+                     sendto(sockfd, &send_pkt, sizeof(packet), 0,
+                            (struct sockaddr *)&client_addr, sizeof(client_addr));
+                     // send_win.last_ack_time = time(NULL);
+                  }
+               }
+            }
+            else
+            {
+               last_ack_received = recv_pkt.ack;
+               dup_ack = 0;
+            }
+         }
+         if (!handshake_complete) {
+            handshake_complete = true;
+            if (recv_pkt.length == 0)
+               recv_win.expect_seq += 1;
          }
          // IF THERE IS A PAYLOAD
          if (recv_pkt.length > 0)
          {
             // fprintf(stderr, "recvwin");
-            add_to_recv_window(&recv_win, &recv_pkt);
-            uint32_t next_expected = process_received_data(&recv_win, STDOUT_FILENO);
+            if (recv_pkt.seq >= recv_win.expect_seq)
+               add_to_recv_window(&recv_win, &recv_pkt);
+            process_received_data(&recv_win, STDOUT_FILENO);
 
             // Send ACK
             // sendwin next seq needs to be == recv_pkt.ack, and ack needs to be recv_pkt.seq + packet length + 1
@@ -172,26 +209,66 @@ int main(int argc, char *argv[])
                   memcpy(data_pkt.payload, buf, bytes_read);
 
                   add_to_send_window(&send_win, &data_pkt);
+                  print_send_window(&send_win);
                   packet_to_network(&data_pkt);
                   print_diag(&data_pkt, SEND);
                   sendto(sockfd, &data_pkt, sizeof(packet), 0,
                          (struct sockaddr *)&client_addr, client_addr_len);
+               } else {
+                  // send empty ack
+                  packet ack_pkt = create_packet(0, recv_win.expect_seq, 0, 2);
+                  packet_to_network(&ack_pkt);
+                  print_diag(&ack_pkt, SEND);
+                  sendto(sockfd, &ack_pkt, sizeof(packet), 0, 
+                        (struct sockaddr *)&client_addr, sizeof(client_addr));
                }
+            } else {
+               // send empty ack
+               packet ack_pkt = create_packet(0, recv_win.expect_seq, 0, 2);
+               packet_to_network(&ack_pkt);
+               print_diag(&ack_pkt, SEND);
+               sendto(sockfd, &ack_pkt, sizeof(packet), 0, 
+                     (struct sockaddr *)&client_addr, sizeof(client_addr));
             }
          }
       }
       else
       {
-         if (check_retransmit(&send_win))
+         clock_t now = clock();
+         // if (currtime - last_ack_time >= 1)
+         if (now - clk > CLOCKS_PER_SEC)
          {
             packet *retx_pkt = get_retransmit_packet(&send_win);
             if (retx_pkt)
             {
-               packet_to_network(retx_pkt);
-               // print_diag(&retx_pkt, SEND);
-               sendto(sockfd, retx_pkt, sizeof(packet), 0,
+               retx_pkt->ack = recv_win.expect_seq;
+               packet send_pkt = *retx_pkt;
+               packet_to_network(&send_pkt);
+               print_diag(&send_pkt, RTOS);
+               sendto(sockfd, &send_pkt, sizeof(packet), 0,
                       (struct sockaddr *)&client_addr, client_addr_len);
-               send_win.last_ack_time = time(NULL);
+               clk = clock();
+            }
+         }
+         if (send_win.size < MAX_WINDOW_SIZE / MSS)
+         {
+            char buf[MSS];
+            int bytes_read = read(STDIN_FILENO, buf, MSS);
+
+            if (bytes_read > 0)
+            {
+               // packet data_pkt = create_packet(send_win.next_seq,
+               //                                 recv_win.expect_seq, bytes_read, 2);
+               packet data_pkt = create_packet(send_win.next_seq,
+                                                recv_win.expect_seq, bytes_read, 2);
+               memcpy(data_pkt.payload, buf, bytes_read);
+
+               add_to_send_window(&send_win, &data_pkt);
+               print_send_window(&send_win);
+               packet_to_network(&data_pkt);
+               print_diag(&data_pkt, SEND);
+               sendto(sockfd, &data_pkt, sizeof(packet), 0,
+                        (struct sockaddr *)&client_addr, client_addr_len);
             }
          }
       }

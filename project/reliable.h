@@ -96,6 +96,18 @@ void print_send_window(send_window *window)
     fprintf(stderr, "\n");
 }
 
+void print_recv_window(recv_window *window)
+{
+    fprintf(stderr, "RBUF");
+    BufferNode *current = window->head;
+    while (current != NULL)
+    {
+        fprintf(stderr, " %d", current->pkt.seq);
+        current = current->next;
+    }
+    fprintf(stderr, "\n");
+}
+
 // Initialize windows
 void init_send_window(send_window *window)
 {
@@ -163,7 +175,7 @@ packet *get_retransmit_packet(send_window *window)
     return NULL;
 }
 // Process acknowledgements
-void process_ack(send_window *window, uint32_t ack_num, int sockfd, struct sockaddr_in addr)
+bool process_ack(send_window *window, uint32_t ack_num, int sockfd, struct sockaddr_in addr)
 {
     bool found_new_ack = false;
     BufferNode *current = window->head;
@@ -227,6 +239,7 @@ void process_ack(send_window *window, uint32_t ack_num, int sockfd, struct socka
     {
         window->base_seq = window->head->pkt.seq;
     }
+    return found_new_ack;
 }
 
 // Add packet to receiving window
