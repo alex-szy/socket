@@ -79,6 +79,7 @@ void p_retransmit_on_duplicate_ack(params *p) {
             }
         }
     } else {
+        p->ack_count = 1;
         p->recv_ack = p->pkt_recv.ack;
     }
 }
