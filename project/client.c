@@ -43,13 +43,13 @@ int main(int argc, char *argv[]) {
     stdin_nonblock();
 
     // Create the SYN packet
-    p.pkt_send.length = 0;
     p.pkt_send.seq = p.send_seq;
+    p.pkt_send.ack = p.recv_seq;
+    p.pkt_send.length = 0;
     p.pkt_send.flags = PKT_SYN;
 
     // Push the syn packet onto the queue and send it
-    q_push_back(p.send_q, &p.pkt_send);
-    send_packet(p.sockfd, &p.addr, &p.pkt_send, "SEND");
+    p_send_and_enqueue_pkt_send(&p);
     p.send_seq++;
 
     for (;;) {  // wait for syn ack

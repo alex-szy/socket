@@ -57,13 +57,11 @@ int main(int argc, char *argv[]) {
             continue;
         if (p.pkt_recv.flags & PKT_SYN) {
             p.recv_seq = p.pkt_recv.seq + 1;
-            p.pkt_send.flags = PKT_ACK | PKT_SYN;
-            p.pkt_send.ack = p.recv_seq;
             p.pkt_send.seq = p.send_seq;
+            p.pkt_send.ack = p.recv_seq;
+            p.pkt_send.flags = PKT_ACK | PKT_SYN;
+            p_send_and_enqueue_pkt_send(&p);
             p.send_seq++;
-            q_push_back(p.send_q, &p.pkt_send);
-            q_print(p.send_q, "SBUF");
-            send_packet(p.sockfd, &p.addr, q_front(p.send_q), "SEND");
             p.before = clock();
             break;
         }

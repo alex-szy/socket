@@ -26,6 +26,7 @@ void p_init(params *p,
             void (*construct_addr)(struct sockaddr_in*, int, char*[]));
 
 void p_retransmit_on_timeout(params *p);
+void p_send_and_enqueue_pkt_send(params *p);
 bool p_send_payload_ack(params *p);
 void p_retransmit_on_duplicate_ack(params *p);
 void p_handle_data_packet(params *p);

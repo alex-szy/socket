@@ -45,6 +45,17 @@ void p_retransmit_on_timeout(params *p) {
     }
 }
 
+/* Sends the pkt_send packet and enqueues it.
+Only use this function to send a new packet over the network which needs to be acked.
+Like a syn packet, a syn ack packet, or a packet with data in it.
+Do not call this function if the queue is full, as you will have already consumed and lost the data from stdin. */
+void p_send_and_enqueue_pkt_send(params *p) {
+    send_packet(p->sockfd, &p->addr, &p->pkt_send, "SEND");
+    q_push_back(p->send_q, &p->pkt_send);
+    q_print(p->send_q, "SBUF");
+    p->send_seq += p->pkt_send.length; 
+}
+
 /* Checks if send queue is full.
 If not full and there is data in stdin, send a packet with the data and return true.
 Else do nothing and return false. */
@@ -57,10 +68,7 @@ bool p_send_payload_ack(params *p) {
     p->pkt_send.ack = p->recv_seq;
     p->pkt_send.seq = p->send_seq;
     p->pkt_send.flags = PKT_ACK;
-    q_push_back(p->send_q, &p->pkt_send);
-    q_print(p->send_q, "SBUF");
-    p->send_seq += bytes;
-    send_packet(p->sockfd, &p->addr, &p->pkt_send, "SEND");
+    p_send_and_enqueue_pkt_send(p);
     return true;
 }
 
@@ -94,13 +102,16 @@ void p_handle_data_packet(params *p) {
         p->recv_seq += p->pkt_recv.length;  // next packet
 
         // loop through sorted packet buffer and pop off next packets
-
+        bool removed = false;
         for (packet *pkt = q_front(p->recv_q);
                 pkt != NULL && pkt->seq == p->recv_seq;
                 pkt = q_pop_front_get_next(p->recv_q)) {
+            removed = true;
             write_pkt_to_stdout(pkt);
             p->recv_seq += pkt->length;
         }
+        if (removed)
+            q_print(p->recv_q, "RBUF");
     } else if (p->pkt_recv.seq > p->recv_seq) {  // future packet, try to buffer
         q_try_insert_keep_sorted(p->recv_q, &p->pkt_recv);
         q_print(p->recv_q, "RBUF");
@@ -116,6 +127,8 @@ bool p_clear_acked_packets_from_sbuf(params *p) {
         flag = true;
         pkt = q_pop_front_get_next(p->send_q);
     }
+    if (flag)
+        q_print(p->send_q, "SBUF");
     return flag;
 }
 
@@ -142,6 +155,20 @@ void p_listen(params *p) {
             if (p_clear_acked_packets_from_sbuf(p))  // reset the timer if new ack received
                 p->before = clock();
 
+            // if syn ack received at this point, the syn ack ack must have been dropped.
+            // the only case in which this could happen is if the syn ack was empty, since it wouldn't have been enqueued
+            // we need to ack this syn ack to complete the handshake.
+            // however, we cannot send data in this ack no matter what, since the original ack didn't have data. otherwise we corrupt our send_seq.
+            // technically, only the client needs to handle this, since the server does not send syn ack acks.
+            if (p->pkt_recv.flags & PKT_SYN) {
+                p->pkt_send.seq = p->pkt_recv.ack;
+                p->pkt_send.ack = p->recv_seq;
+                p->pkt_send.flags = PKT_ACK;
+                p->pkt_send.length = 0;
+                send_packet(p->sockfd, &p->addr, &p->pkt_send, "SEND");
+                continue;
+            }
+            
             if (p->pkt_recv.length == 0)  // no further handling for empty ack packets
                 continue;
 
