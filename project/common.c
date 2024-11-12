@@ -38,8 +38,10 @@ void p_retransmit_on_timeout(params *p) {
         // send the packet with lowest seq number in sending buffer
         packet* send = q_front(p->send_q);
         // fprintf(stderr, "q size: %ld\n", q_size(send_q));
-        if (send != NULL)
+        if (send != NULL) {
+            send->ack = p->recv_seq;
             send_packet(p->sockfd, &p->addr, send, "RTOS");
+        }
     }
 }
 
@@ -71,8 +73,10 @@ void p_retransmit_on_duplicate_ack(params *p) {
         if (p->ack_count == 3) {
             p->ack_count = 0;
             packet* send = q_front(p->send_q);
-            if (send != NULL)
+            if (send != NULL) {
+                send->ack = p->recv_seq;
                 send_packet(p->sockfd, &p->addr, send, "DUPS");
+            }
         }
     } else {
         p->recv_ack = p->pkt_recv.ack;
