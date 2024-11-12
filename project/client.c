@@ -3,63 +3,259 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include "utils.h"
+#include <time.h>
+#include "reliable.h"
+#include <stdio.h>
 
-int main(int argc, char *argv[]) {
-	/* 1. Create socket */
-	int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-							// use IPv4  use UDP
+#define RECV 0
+#define SEND 1
+#define RTOS 2
+#define DUPA 3
 
-	// Make stdin and socket non-blocking
-	int socket_nonblock = fcntl(sockfd, F_SETFL, O_NONBLOCK);
-	if (socket_nonblock < 0) die("non-block socket");
-	int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
-	if (stdin_nonblock < 0) die("non-block stdin");
+static inline void print_diag(packet *pkt, int diag)
+{
+   switch (diag)
+   {
+   case RECV:
+      fprintf(stderr, "RECV");
+      break;
+   case SEND:
+      fprintf(stderr, "SEND");
+      break;
+   case RTOS:
+      fprintf(stderr, "RTOS");
+      break;
+   case DUPA:
+      fprintf(stderr, "DUPS");
+      break;
+   }
 
-	/* 2. Construct server address */
-	struct sockaddr_in serveraddr;
-	serveraddr.sin_family = AF_INET; // use IPv4
-	if (argc > 1 && strcmp(argv[1], "localhost"))
-		serveraddr.sin_addr.s_addr = inet_addr(argv[1]);
-	else
-		serveraddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	socklen_t serversize = sizeof(serveraddr); // Temp buffer for recvfrom API
+   bool syn = pkt->flags & 0b01;
+   bool ack = pkt->flags & 0b10;
+   fprintf(stderr, " %u ACK %u SIZE %hu FLAGS ", ntohl(pkt->seq),
+           ntohl(pkt->ack), ntohs(pkt->length));
+   if (!syn && !ack)
+   {
+      fprintf(stderr, "NONE");
+   }
+   else
+   {
+      if (syn)
+      {
+         fprintf(stderr, "SYN ");
+      }
+      if (ack)
+      {
+         fprintf(stderr, "ACK ");
+      }
+   }
+   fprintf(stderr, "\n");
+}
 
-	// Set sending port
-	int SEND_PORT;
-	if (argc > 2) SEND_PORT = atoi(argv[2]);
-	else SEND_PORT = 8080;
-	serveraddr.sin_port = htons(SEND_PORT); // Big endian
+int main(int argc, char *argv[])
+{
+   if (argc != 3)
+   {
+      exit(EXIT_FAILURE);
+   }
 
-	/* 4. Create buffer to store data */
-	int BUF_SIZE = 1024;
-	char client_buf[BUF_SIZE];
-	char server_buf[BUF_SIZE];
+   // Create socket and set non-blocking
+   int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+   if (sockfd < 0)
+      return errno;
 
-	for (;;) {
-		/* Send data to server */
-		int bytes_read = read(STDIN_FILENO, client_buf, BUF_SIZE);
-		if (bytes_read > 0) {
-			int did_send = sendto(sockfd, client_buf, bytes_read,
-								// socket  send data   how much to send
-									0, (struct sockaddr*) &serveraddr,
-								// flags   where to send
-									sizeof(serveraddr));
-			if (did_send < 0) die("send");
-		} else if (bytes_read < 0 && errno != EAGAIN) die("stdin");
+   int flags = fcntl(sockfd, F_GETFL, 0);
+   if (flags < 0)
+      return errno;
+   fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
+   flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+   if (flags < 0)
+      return errno;
+   fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
-		/* 5. Listen for response from server */
-		int bytes_recvd = recvfrom(sockfd, server_buf, BUF_SIZE,
-										// socket  store data  how much
-											0, (struct sockaddr*) &serveraddr,
-											&serversize);
-		// Error if bytes_recvd < 0 :(
-		if (bytes_recvd < 0 && errno != EAGAIN) die("receive");
-		// Print out data
-		else if (bytes_recvd > 0) write(1, server_buf, bytes_recvd);
-	}
+   // Setup server address
+   struct sockaddr_in serveraddr;
+   memset(&serveraddr, 0, sizeof(serveraddr));
+   serveraddr.sin_family = AF_INET;
+   if (!strcmp(argv[1], "localhost"))
+   {
+      inet_aton("127.0.0.1", &serveraddr.sin_addr);
+   }
+   else
+   {
+      inet_aton(argv[1], &serveraddr.sin_addr);
+   }
+   serveraddr.sin_port = htons(atoi(argv[2]));
+
+   // Initialize windows
+   send_window send_win;
+   recv_window recv_win;
+   init_send_window(&send_win);
+   init_recv_window(&recv_win);
+
+   // Start three-way handshake
+   uint32_t initial_seq = rand() % (UINT32_MAX / 2);
+   packet syn_pkt = create_packet(initial_seq, 0, 0, 1); // SYN flag
+   packet_to_network(&syn_pkt);
+
+   sendto(sockfd, &syn_pkt, sizeof(syn_pkt), 0,
+          (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+
+   bool handshake_complete = false;
+   socklen_t serversize = sizeof(serveraddr);
+
+   // Main loop
+   packet recv_pkt;
+   while (true)
+   {
+      int bytes_recvd = recvfrom(sockfd, &recv_pkt, sizeof(recv_pkt), 0,
+                                 (struct sockaddr *)&serveraddr, &serversize);
+      if (bytes_recvd > 0)
+      {
+         break;
+      }
+      else
+      {
+         continue;
+      }
+   }
+   //any pkt
+   packet_to_host(&recv_pkt);
+   packet ack_pkt = create_packet(initial_seq + 1, recv_pkt.seq + 1, 0, 2);
+   packet_to_network(&ack_pkt);
+   sendto(sockfd, &ack_pkt, sizeof(ack_pkt), 0,
+          (struct sockaddr *)&serveraddr, serversize);
+
+   send_win.base_seq = initial_seq + 1;
+   send_win.next_seq = initial_seq + 2;
+   recv_win.expect_seq = recv_pkt.seq + 1;
+
+   uint32_t last_ack_received = 0;
+   int dup_ack = 0;
+   time_t last_ack_time = time(NULL);
+   clock_t clk = clock();
+
+   while (1)
+   {
+      // fprintf(stderr, "hi");
+      packet recv_pkt;
+      print_send_window(&send_win);
+      // Check for incoming packets
+      int bytes_recvd = recvfrom(sockfd, &recv_pkt, sizeof(recv_pkt), 0,
+                                 (struct sockaddr *)&serveraddr, &serversize);
+
+      if (bytes_recvd > 0)
+      {
+         print_diag(&recv_pkt, RECV);
+         packet_to_host(&recv_pkt);
+         uint32_t ackk = recv_pkt.ack;
+         // Process regular data packet
+         if (recv_pkt.flags & 2)
+         { // ACK flag set
+
+            process_ack(&send_win, recv_pkt.ack, sockfd, serveraddr);
+            if (ackk == last_ack_received)
+            {
+               dup_ack++;
+               if (dup_ack >= 3)
+               {
+                  packet *retx_pkt = get_retransmit_packet(&send_win);
+                  if (retx_pkt)
+                  {
+                     retx_pkt->ack = recv_win.expect_seq;
+                     packet_to_network(retx_pkt);
+                     // print_diag(&retx_pkt, SEND);
+                     sendto(sockfd, retx_pkt, sizeof(packet), 0,
+                            (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+                     // send_win.last_ack_time = time(NULL);
+                  }
+               }
+            }
+            else
+            {
+               last_ack_received = ackk;
+               dup_ack = 0;
+            }
+            last_ack_time = time(NULL);
+            clk = clock();
+            // send_win.next_seq = 1069;
+         }
+
+         if (recv_pkt.length > 0)
+         {
+            add_to_recv_window(&recv_win, &recv_pkt);
+            uint32_t next_expected = process_received_data(&recv_win, STDOUT_FILENO);
+
+            // Send ACK
+            if (send_win.size < MAX_WINDOW_SIZE / MSS)
+            {
+               char buf[MSS];
+               int bytes_read = read(STDIN_FILENO, buf, MSS);
+
+               if (bytes_read > 0)
+               {
+                  packet data_pkt = create_packet(send_win.next_seq,
+                                                  recv_win.expect_seq, bytes_read, 2);
+                  memcpy(data_pkt.payload, buf, bytes_read);
+                  // add_to_send_window(&send_win, &data_pkt);
+                  add_to_send_window(&send_win, &data_pkt);
+                  packet_to_network(&data_pkt);
+                  print_diag(&data_pkt, SEND);
+                  sendto(sockfd, &data_pkt, sizeof(packet), 0,
+                         (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+                  // packet_to_host(&data_pkt); I CHANGED THIS AFTER 10 PTS
+                  // add_to_send_window(&send_win, &data_pkt);
+               }
+            }
+         }
+         // if (check_retransmit(&send_win))
+         // {
+         //    packet *retx_pkt = get_retransmit_packet(&send_win);
+         //    if (retx_pkt)
+         //    {
+         //       packet_to_network(retx_pkt);
+         //       sendto(sockfd, retx_pkt, sizeof(packet), 0,
+         //              (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+         //    }
+         // }
+      }
+      else
+      {
+         // if (check_retransmit(&send_win))
+         time_t currtime = time(NULL);
+         clock_t now = clock();
+         // if (currtime - last_ack_time >= 1)
+         if (now - clk > CLOCKS_PER_SEC)
+         {
+            packet *retx_pkt = get_retransmit_packet(&send_win);
+            if (retx_pkt)
+            {
+               retx_pkt->ack = recv_win.expect_seq;
+               packet_to_network(retx_pkt);
+
+               // print_diag(&retx_pkt, SEND);
+               sendto(sockfd, retx_pkt, sizeof(packet), 0,
+                      (struct sockaddr *)&serveraddr, sizeof(serveraddr));
+               // send_win.last_ack_time = time(NULL);
+               last_ack_time = time(NULL);
+               clk = clock();
+            }
+         }
+      }
+      // else
+      // {
+      //    continue;
+      // }
+
+      // Check for retransmissions
+
+      // printf(send_win);
+      // printf(recv_win);
+   }
+
+   close(sockfd);
+   return 0;
 }
