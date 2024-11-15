@@ -1,13 +1,19 @@
 CC=gcc
 CFLAGS= 
 
+
 all: clean build
 
-default: build
+debug: CFLAGS=-g -fsanitize=address
+debug: all
 
-build: server.c client.c
-	${CC} -o server server.c ${CFLAGS}
-	${CC} -o client client.c ${CFLAGS}
+build: server client
+
+server: server.c reliable.c reliable.h
+	${CC} ${CFLAGS} -o $@ server.c reliable.c
+
+client: client.c reliable.c reliable.h
+	${CC} ${CFLAGS} -o $@ client.c reliable.c
 
 clean:
 	rm -rf server client *.bin *.out *.dSYM

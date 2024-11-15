@@ -4,3 +4,7 @@ project/*.out
 *.zip
 project/project
 results
+.vscode/
+test.c
+pseudo
+keys/
