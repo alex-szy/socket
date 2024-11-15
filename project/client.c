@@ -5,10 +5,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
-#include <fcntl.h>
 #include <time.h>
-#include "utils.h"
 #include "deque.h"
 #include "common.h"
 
@@ -54,7 +51,7 @@ int main(int argc, char *argv[]) {
 
     for (;;) {  // wait for syn ack
         p_retransmit_on_timeout(&p);
-        if (recv_packet(p.sockfd, &p.addr, &p.pkt_recv) <= 0)
+        if (p_recv_packet(&p) <= 0)
             continue;
         if (p.pkt_recv.flags & PKT_ACK && p.pkt_recv.flags & PKT_SYN) {  // syn ack packet
             if (p_clear_acked_packets_from_sbuf(&p))  // reset the clock if new ack received
@@ -65,12 +62,12 @@ int main(int argc, char *argv[]) {
                 p.pkt_send.ack = p.recv_seq;
                 p.pkt_send.seq = p.send_seq;
                 p.pkt_send.length = 0;
-                send_packet(p.sockfd, &p.addr, &p.pkt_send, "SEND");
+                p_send_packet(&p, NULL, "SEND");
                 p.send_seq++;
             }
             break;
         } else {
-            send_packet(p.sockfd, &p.addr, q_front(p.send_q), "SEND");
+            p_send_packet(&p, q_front(p.send_q), "SEND");
         }
     }
 

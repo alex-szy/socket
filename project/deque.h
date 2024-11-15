@@ -1,9 +1,18 @@
 #ifndef PROJECT_DEQUE_H_
 #define PROJECT_DEQUE_H_
 
-#include <stdlib.h>
 #include <stdbool.h>
-#include "utils.h"
+#include <stdint.h>
+
+#define MSS 1012  // MSS = Maximum Segment Size (aka max length)
+typedef struct {
+    uint32_t ack;
+    uint32_t seq;
+    uint16_t length;
+    uint8_t flags;
+    uint8_t unused;
+    uint8_t payload[MSS];
+} packet;
 
 typedef struct queue_t* q_handle_t;
 

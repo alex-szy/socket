@@ -5,10 +5,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <stdbool.h>
 #include <time.h>
-#include "utils.h"
 #include "deque.h"
 #include "common.h"
 
@@ -53,7 +50,7 @@ int main(int argc, char *argv[]) {
     bind_socket(p.sockfd, argc, argv);  // Bind to 0.0.0.0
 
     for (;;) {  // listen for syn packet
-        if (recv_packet(p.sockfd, &p.addr, &p.pkt_recv) <= 0)
+        if (p_recv_packet(&p) <= 0)
             continue;
         if (p.pkt_recv.flags & PKT_SYN) {
             p.recv_seq = p.pkt_recv.seq + 1;
@@ -69,7 +66,7 @@ int main(int argc, char *argv[]) {
 
     for (;;) {  // listen for syn ack ack packet, may have payload
         p_retransmit_on_timeout(&p);
-        if (recv_packet(p.sockfd, &p.addr, &p.pkt_recv) <= 0)
+        if (p_recv_packet(&p) <= 0)
             continue;
         if (p.pkt_recv.flags & PKT_ACK &&
             (p.pkt_recv.seq == p.recv_seq || p.pkt_recv.length == 0)) {
@@ -84,7 +81,7 @@ int main(int argc, char *argv[]) {
             }
             break;
         } else {
-            send_packet(p.sockfd, &p.addr, q_front(p.send_q), "SEND");
+            p_send_packet(&p, q_front(p.send_q), "SEND");
         }
     }
 

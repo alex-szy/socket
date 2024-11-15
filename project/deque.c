@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "deque.h"
 
 typedef struct queue_node_t node;

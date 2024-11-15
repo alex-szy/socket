@@ -3,11 +3,12 @@ CFLAGS=
 
 all: clean build
 
-default: build
+debug: CFLAGS=-g -fsanitize=address
+debug: all
 
-build: server.c client.c utils.h utils.c deque.h deque.c common.h common.c
-	${CC} -o server server.c utils.c deque.c common.c ${CFLAGS}
-	${CC} -o client client.c utils.c deque.c common.c ${CFLAGS}
+build: server.c client.c deque.h deque.c common.h common.c
+	${CC} -o server server.c deque.c common.c ${CFLAGS}
+	${CC} -o client client.c deque.c common.c ${CFLAGS}
 
 clean:
 	rm -rf server client *.bin *.out *.dSYM
