@@ -1,89 +1,22 @@
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <string.h>
 #include <unistd.h>
-#include <errno.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
-#include <time.h>
-#include "deque.h"
 #include "common.h"
 
-
-static int construct_serveraddr(struct sockaddr_in *servaddr,
-                                int argc,
-                                char *argv[]) {
-    servaddr->sin_family = AF_INET;  // use IPv4
-    servaddr->sin_addr.s_addr = INADDR_ANY;  // accept all connections
-                            // same as inet_addr("0.0.0.0")
-                                     // "Address string to network bytes"
-    // Set receiving port
-    int PORT;
-    if (argc > 1)
-        PORT = atoi(argv[1]);
-    else
-        PORT = 8080;
-    servaddr->sin_port = htons(PORT);  // Big endian
-    return 1;
-}
-
-
-static void bind_socket(int sockfd, int argc, char *argv[]) {
-    // Construct the address
-    struct sockaddr_in servaddr;
-    construct_serveraddr(&servaddr, argc, argv);
-    int did_bind = bind(sockfd, (struct sockaddr*) &servaddr,
-                        sizeof(servaddr));
-    // Error if did_bind < 0 :(
-    if (did_bind < 0) die("bind socket");
-}
-
-
 int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: server <port>\n");
+        exit(1);
+    }
+
     // Seed the random number generator
     srand(2);
 
-    params p;
-    p_init(&p, 20, argc, argv, NULL);
+    int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    if (stdin_nonblock < 0) die("non-block stdin");
 
-    stdin_nonblock();  // Make stdin nonblocking
-    bind_socket(p.sockfd, argc, argv);  // Bind to 0.0.0.0
+    init_server(atoi(argv[1]));;
 
-    for (;;) {  // listen for syn packet
-        if (p_recv_packet(&p) <= 0)
-            continue;
-        if (p.pkt_recv.flags & PKT_SYN) {
-            p.recv_seq = p.pkt_recv.seq + 1;
-            p.pkt_send.seq = p.send_seq;
-            p.pkt_send.ack = p.recv_seq;
-            p.pkt_send.flags = PKT_ACK | PKT_SYN;
-            p_send_and_enqueue_pkt_send(&p);
-            p.send_seq++;
-            p.before = clock();
-            break;
-        }
-    }
-
-    for (;;) {  // listen for syn ack ack packet, may have payload
-        p_retransmit_on_timeout(&p);
-        if (p_recv_packet(&p) <= 0)
-            continue;
-        if (p.pkt_recv.flags & PKT_ACK &&
-            (p.pkt_recv.seq == p.recv_seq || p.pkt_recv.length == 0)) {
-            // syn ack ack packet, may have payload
-            if (p_clear_acked_packets_from_sbuf(&p))
-                p.before = clock();
-            if (p.pkt_recv.length == 0) {  // incoming zero length syn ack ack
-                p.recv_seq++;
-            } else {
-                p_handle_data_packet(&p);
-                p_send_payload_ack(&p);
-            }
-            break;
-        } else {
-            p_send_packet(&p, q_front(p.send_q), "SEND");
-        }
-    }
-
-    p_listen(&p);
+    transport_listen();
 }
