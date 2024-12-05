@@ -16,6 +16,10 @@ typedef struct {
 
 typedef struct queue_t* q_handle_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 q_handle_t q_init(uint32_t capacity);
 void q_destroy(q_handle_t self);
 void q_clear(q_handle_t self);
@@ -30,5 +34,9 @@ bool q_full(q_handle_t self);
 bool q_empty(q_handle_t self);
 void q_set_capacity(q_handle_t self, uint32_t capacity);
 void q_print(q_handle_t self, const char *str);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // PROJECT_DEQUE_H_

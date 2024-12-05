@@ -26,6 +26,9 @@ static clock_t before;
 static struct sockaddr_in addr;
 static socklen_t addr_size;
 
+static ssize_t(*read_func)(uint8_t*, size_t);
+static ssize_t(*write_func)(uint8_t*, size_t);
+
 static inline int make_nonblock_socket() {
     /* 1. Create socket */
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -56,7 +59,7 @@ static inline void print_packet(const packet *pkt, const char* op) {
 }
 
 static inline int read_stdin_to_pkt(packet *pkt) {
-    int bytes_read = read(STDIN_FILENO, &pkt->payload, MSS);
+    int bytes_read = read_func(pkt->payload, MSS);
     if (bytes_read >= 0)
         pkt->length = bytes_read;
     else
@@ -65,7 +68,7 @@ static inline int read_stdin_to_pkt(packet *pkt) {
 }
 
 static inline void write_pkt_to_stdout(packet *pkt) {
-    write(STDOUT_FILENO, &pkt->payload, pkt->length);
+    write_func(pkt->payload, pkt->length);
 }
 
 static int send_packet(const packet *pkt, const char* str) {
@@ -103,8 +106,10 @@ static int recv_packet() {
 }
 
 /* Initializes the parameters needed by the client or server. */
-static void init_common() {
+static void init_common(ssize_t(*read_sec)(uint8_t*, size_t), ssize_t(*write_sec)(uint8_t*, size_t)) {
     sockfd = make_nonblock_socket();
+    read_func = read_sec;
+    write_func = write_sec;
     memset(&pkt_send, 0, sizeof(packet));
     memset(&pkt_recv, 0, sizeof(packet));
     recv_seq = 0;
@@ -228,8 +233,8 @@ static inline void send_empty_ack() {
     send_packet(NULL, "SEND");
 }
 
-void init_client(int port, const char* address) {
-    init_common();
+void init_client(int port, const char* address, ssize_t(*read_sec)(uint8_t*, size_t), ssize_t(*write_sec)(uint8_t*, size_t)) {
+    init_common(read_sec, write_sec);
     addr.sin_family = AF_INET;
     if (strcmp(address, "localhost"))
         addr.sin_addr.s_addr = inet_addr(address);
@@ -271,8 +276,8 @@ void init_client(int port, const char* address) {
     }
 }
 
-void init_server(int port) {
-    init_common();
+void init_server(int port, ssize_t(*read_sec)(uint8_t*, size_t), ssize_t(*write_sec)(uint8_t*, size_t)) {
+    init_common(read_sec, write_sec);
 
     struct sockaddr_in servaddr;
     servaddr.sin_family = AF_INET;  // use IPv4
