@@ -14,17 +14,20 @@ extern "C" {
 
 using namespace std;
 
-#define CLIENT_HELLO 0
-#define CLIENT_AWAIT_SERVER_HELLO 1
-#define CLIENT_KEY_EXCHANGE 2
-#define CLIENT_AWAIT_SERVER_FINISH 3
-#define CLIENT_NORMAL 4
-
-#define SERVER_AWAIT_CLIENT_HELLO 0
-#define SERVER_HELLO 1
-#define SERVER_AWAIT_CLIENT_KEY 2
-#define SERVER_HANDSHAKE_FINISHED 3
-#define SERVER_NORMAL 4
+namespace state {
+    enum state {
+        client_hello,
+        client_await_server_hello,
+        client_key_exchange,
+        client_await_server_finish,
+        client_normal,
+        server_await_client_hello,
+        server_hello,
+        server_await_client_key,
+        server_handshake_finished,
+        server_normal
+    };
+};
 
 namespace pf {
     enum packetflag {
@@ -46,7 +49,7 @@ namespace pf {
     };
 };
 
-static int state = 0;
+static state::state curr_state;
 
 static uint8_t my_nonce[255];
 
@@ -60,6 +63,9 @@ static char server_key_file[] = "server_key.bin";
 
 static uint8_t signed_peer_nonce[255];
 static size_t signed_peer_nonce_size;
+
+ssize_t (*read_sec)(uint8_t*, size_t) = nullptr;
+ssize_t (*write_sec)(uint8_t*, size_t) = nullptr;
 
 static inline void security_fail(int code) {
     switch (code) {
@@ -137,8 +143,7 @@ static ssize_t read_and_encrypt(uint8_t* buf, size_t nbytes) {
     hmac(iv_cat_cipher.data(), iv_cat_cipher.size(), tempbuf.data() + mac_idx);
 
     assert(tempbuf.size() == bytes);
-    memcpy(buf, tempbuf.data(), tempbuf.size());
-    printbuf(buf, bytes, "SENT");
+    memcpy(buf, tempbuf.data(), bytes);
     return bytes;
 }
 
@@ -188,268 +193,303 @@ static ssize_t decrypt_and_write(uint8_t* buf, size_t nbytes) {
     return write(STDOUT_FILENO, plaintext.get(), bytes);
 }
 
+static ssize_t make_client_hello(uint8_t* buf, size_t nbytes) {
+    vector<uint8_t> tempbuf;
+    ssize_t bytes = (NONCE_SIZE + 3) + 3;
+    if (nbytes < bytes)
+        return 0;
+
+    tempbuf.push_back(pf::client_hello);
+    append_hton_2_bytes(tempbuf, bytes - 3);
+
+    tempbuf.push_back(pf::client_nonce);
+    append_hton_2_bytes(tempbuf, NONCE_SIZE);
+    generate_nonce(my_nonce, NONCE_SIZE);
+    tempbuf.insert(tempbuf.end(), my_nonce, my_nonce + NONCE_SIZE);
+
+    curr_state = state::client_await_server_hello;
+    assert(bytes == tempbuf.size());
+    memcpy(buf, tempbuf.data(), bytes);
+
+    return bytes;
+}
+
+static ssize_t make_client_key_exchange(uint8_t* buf, size_t nbytes) {
+    // Generate key pair and sign the public key with my own private key
+    ssize_t bytes = cert_size + (signed_peer_nonce_size + 3) + 3;
+    if (nbytes < bytes)
+        return 0;
+
+    vector<uint8_t> tempbuf;
+    tempbuf.push_back(pf::key_exchange_req);
+    append_hton_2_bytes(tempbuf, bytes - 3);
+
+    // Insert self signed certificate
+    tempbuf.insert(tempbuf.end(), certificate, certificate + cert_size);
+    
+    // Insert the signed server nonce
+    tempbuf.push_back(pf::server_nonce_signature);
+    append_hton_2_bytes(tempbuf, signed_peer_nonce_size);
+    tempbuf.insert(tempbuf.end(), signed_peer_nonce, signed_peer_nonce + signed_peer_nonce_size);
+
+    // Generate the symmetric keys
+    derive_secret();
+    derive_keys();
+    
+    curr_state = state::client_await_server_finish;
+    assert(bytes == tempbuf.size());
+    memcpy(buf, tempbuf.data(), bytes);
+    return bytes;
+}
 
 /* Called when client transport layer attempts to send data to server. */
-ssize_t read_sec_client(uint8_t* buf, size_t nbytes) {
+static ssize_t read_sec_client(uint8_t* buf, size_t nbytes) {
     ssize_t bytes = 0;
-    vector<uint8_t> tempbuf;
-    switch (state) {
-        case CLIENT_HELLO: // Send the client hello
-            load_ca_public_key(ca_public_key_file);
-            bytes = (NONCE_SIZE + 3) + 3;
-            if (nbytes < bytes)
-                break;
-
-            tempbuf.push_back(pf::client_hello);
-            append_hton_2_bytes(tempbuf, bytes - 3);
-
-            tempbuf.push_back(pf::client_nonce);
-            append_hton_2_bytes(tempbuf, NONCE_SIZE);
-            generate_nonce(my_nonce, NONCE_SIZE);
-            tempbuf.insert(tempbuf.end(), my_nonce, my_nonce + NONCE_SIZE);
-
-            state = CLIENT_AWAIT_SERVER_HELLO;
+    switch (curr_state) {
+        case state::client_hello: // Send the client hello
+            bytes = make_client_hello(buf, nbytes);
             break;
-        case CLIENT_AWAIT_SERVER_HELLO: // Sent client hello, waiting for server hello
+        case state::client_await_server_hello: // Sent client hello, waiting for server hello
+            return 0;
+        case state::client_key_exchange:
+            bytes = make_client_key_exchange(buf, nbytes);
             break;
-        case CLIENT_KEY_EXCHANGE:
-            // Generate key pair and sign the public key with my own private key
-            derive_public_key();
-            derive_self_signed_certificate();
-            bytes = cert_size + (signed_peer_nonce_size + 3) + 3;
-
-            tempbuf.push_back(pf::key_exchange_req);
-            append_hton_2_bytes(tempbuf, bytes - 3);
-
-            // Insert self signed certificate
-            tempbuf.insert(tempbuf.end(), certificate, certificate + cert_size);
-            
-            // Insert the signed server nonce
-            tempbuf.push_back(pf::server_nonce_signature);
-            append_hton_2_bytes(tempbuf, signed_peer_nonce_size);
-            tempbuf.insert(tempbuf.end(), signed_peer_nonce, signed_peer_nonce + signed_peer_nonce_size);
-
-            // Generate the symmetric keys
-            derive_secret();
-            derive_keys();
-            
-            state = CLIENT_AWAIT_SERVER_FINISH;
-            break;
-        case CLIENT_AWAIT_SERVER_FINISH:
-            break;
-        case CLIENT_NORMAL:
-            return read_and_encrypt(buf, nbytes);
+        case state::client_await_server_finish:
+            return 0;
+        case state::client_normal:
+            bytes = read_and_encrypt(buf, nbytes);
     }
-    if (!tempbuf.empty()) {
-        memcpy(buf, tempbuf.data(), tempbuf.size());
-        printbuf(buf, bytes, "SENT");
-    }
+    printbuf(buf, bytes, "SENT");
     return bytes;
+}
+
+static ssize_t recv_server_hello(uint8_t* buf, size_t nbytes) {
+    // Check server hello
+    if (*buf != pf::server_hello)
+        security_fail(4);
+    buf += 3;
+
+    // Receive the nonce and sign it
+    if (*buf != pf::server_nonce)
+        security_fail(4);
+    buf++;
+    auto nonce_size = ntoh_2_bytes(buf);
+    buf += 2;
+    signed_peer_nonce_size = sign(buf, nonce_size, signed_peer_nonce);
+    buf += nonce_size;
+
+    // Check the certificate
+    if (*buf != pf::certificate)
+        security_fail(4);
+    buf += 3;
+    
+    // load the peer public key
+    if (*buf != pf::public_key)
+        security_fail(4);
+    buf++;
+    auto peer_key_size = ntoh_2_bytes(buf);
+    buf += 2;
+    auto peer_key = buf;
+    buf += peer_key_size;
+
+    // verify the signature in the cert with the CA public key
+    if (*buf != pf::signature)
+        security_fail(4);
+    buf++;
+    auto signature_size = ntoh_2_bytes(buf);
+    buf += 2;
+
+    if (verify(peer_key, peer_key_size, buf, signature_size, ec_ca_public_key) != 1)
+        security_fail(1);
+    load_peer_public_key(peer_key, peer_key_size);
+    buf += signature_size;
+
+    // verify the nonce signature with the public key in the cert
+    if (*buf != pf::client_nonce_signature)
+        security_fail(4);
+    buf++;
+    auto nonce_signature_size = ntoh_2_bytes(buf);
+    buf += 2;
+    if (verify(my_nonce, NONCE_SIZE, buf, nonce_signature_size, ec_peer_public_key) != 1)
+        security_fail(2);
+    curr_state = state::client_key_exchange;
+    return nbytes;
 }
 
 /* Called when client transport layer attempts to receive data from server */
-ssize_t write_sec_client(uint8_t* buf, size_t nbytes) {
+static ssize_t write_sec_client(uint8_t* buf, size_t nbytes) {
     printbuf(buf, nbytes, "RECEIVED");
-    uint8_t* curr = buf;
-    uint8_t* peer_key;
-    uint16_t nonce_size, peer_key_size, signature_size, nonce_signature_size;
-    switch (state) {
-        case CLIENT_HELLO:
+    switch (curr_state) {
+        case state::client_hello:
             security_fail(4);
-        case CLIENT_AWAIT_SERVER_HELLO:
-            generate_private_key();       
-            // Check server hello
-            if (*curr != pf::server_hello)
+        case state::client_await_server_hello:
+            return recv_server_hello(buf, nbytes);
+        case state::client_key_exchange:
+            security_fail(4);
+        case state::client_await_server_finish:
+            if (*buf != pf::finished)
                 security_fail(4);
-            curr += 3;
-
-            // Receive the nonce and sign it
-            if (*curr != pf::server_nonce)
-                security_fail(4);
-            curr++;
-            nonce_size = *curr << 8 | *(curr + 1);
-            curr += 2;
-            signed_peer_nonce_size = sign(curr, nonce_size, signed_peer_nonce);
-            curr += nonce_size;
-
-            // Check the certificate
-            if (*curr != pf::certificate)
-                security_fail(4);
-            curr += 3;
-            
-            // load the peer public key
-            if (*curr != pf::public_key)
-                security_fail(4);
-            curr++;
-            peer_key_size = ntoh_2_bytes(curr);
-            curr += 2;
-            peer_key = curr;
-            curr += peer_key_size;
-
-            // verify the signature in the cert with the CA public key
-            if (*curr != pf::signature)
-                security_fail(4);
-            curr++;
-            signature_size = ntoh_2_bytes(curr);
-            curr += 2;
-
-            if (verify(peer_key, peer_key_size, curr, signature_size, ec_ca_public_key) != 1)
-                security_fail(1);
-            load_peer_public_key(peer_key, peer_key_size);
-            curr += signature_size;
-
-            // verify the nonce signature with the public key in the cert
-            if (*curr != pf::client_nonce_signature)
-                security_fail(4);
-            curr++;
-            nonce_signature_size = ntoh_2_bytes(curr);
-            curr += 2;
-            if (verify(my_nonce, NONCE_SIZE, curr, nonce_signature_size, ec_peer_public_key) != 1)
-                security_fail(2);
-            state = CLIENT_KEY_EXCHANGE;
+            curr_state = state::client_normal;
             return nbytes;
-        case CLIENT_KEY_EXCHANGE:
-            security_fail(4);
-        case CLIENT_AWAIT_SERVER_FINISH:
-            if (*curr != pf::finished)
-                security_fail(4);
-            state = CLIENT_NORMAL;
-            break;
-        case CLIENT_NORMAL:
+        case state::client_normal:
             return decrypt_and_write(buf, nbytes);
     }
     return 0;
 }
 
-/* Called when server transport layer attempts to send data to client */
-ssize_t read_sec_server(uint8_t* buf, size_t nbytes) {
-    ssize_t bytes = 0;
+static ssize_t make_server_hello(uint8_t* buf, size_t nbytes) {
+    size_t bytes = (NONCE_SIZE + 3) + cert_size + (signed_peer_nonce_size + 3) + 3;
+    if (nbytes < bytes)
+        return 0;
+
     vector<uint8_t> tempbuf;
-    size_t idx;
-    switch (state) {
-        case SERVER_AWAIT_CLIENT_HELLO:
-            break;
-        case SERVER_HELLO:
-            load_certificate(server_cert_file);
+    
+    tempbuf.push_back(pf::server_hello);
+    append_hton_2_bytes(tempbuf, bytes - 3);
+    
+    // Insert the server nonce
+    tempbuf.push_back(pf::server_nonce);
+    append_hton_2_bytes(tempbuf, NONCE_SIZE);
+    generate_nonce(my_nonce, NONCE_SIZE);
+    tempbuf.insert(tempbuf.end(), my_nonce, my_nonce + NONCE_SIZE);
 
-            bytes = (NONCE_SIZE + 3) + cert_size + (signed_peer_nonce_size + 3) + 3;
-            if (nbytes < bytes)
-                break;
-            
-            tempbuf.push_back(pf::server_hello);
-            append_hton_2_bytes(tempbuf, bytes - 3);
-            
-            // Insert the server nonce
-            tempbuf.push_back(pf::server_nonce);
-            append_hton_2_bytes(tempbuf, NONCE_SIZE);
-            generate_nonce(my_nonce, NONCE_SIZE);
-            tempbuf.insert(tempbuf.end(), my_nonce, my_nonce + NONCE_SIZE);
+    // Insert the provided certificate
+    tempbuf.insert(tempbuf.end(), certificate, certificate + cert_size);
 
-            // Insert the provided certificate
-            tempbuf.insert(tempbuf.end(), certificate, certificate + cert_size);
+    // Insert the signed client nonce
+    tempbuf.push_back(pf::client_nonce_signature);
+    append_hton_2_bytes(tempbuf, signed_peer_nonce_size);
+    tempbuf.insert(tempbuf.end(), signed_peer_nonce, signed_peer_nonce + signed_peer_nonce_size);
 
-            // Insert the signed client nonce
-            tempbuf.push_back(pf::client_nonce_signature);
-            append_hton_2_bytes(tempbuf, signed_peer_nonce_size);
-            tempbuf.insert(tempbuf.end(), signed_peer_nonce, signed_peer_nonce + signed_peer_nonce_size);
-
-            state = SERVER_AWAIT_CLIENT_KEY;
-            break;
-        case SERVER_AWAIT_CLIENT_KEY:
-            break;
-        case SERVER_HANDSHAKE_FINISHED:
-            // Send finished
-            bytes = 3;
-            tempbuf.push_back(pf::finished);
-            append_hton_2_bytes(tempbuf, 0);
-            state = SERVER_NORMAL;
-            break;
-        case SERVER_NORMAL:
-            return read_and_encrypt(buf, nbytes);
-    }
-    if (!tempbuf.empty()) {
-        memcpy(buf, tempbuf.data(), tempbuf.size());
-        printbuf(buf, bytes, "SENT");
-    }
+    curr_state = state::server_await_client_key;
+    assert(bytes == tempbuf.size());
+    memcpy(buf, tempbuf.data(), bytes);
     return bytes;
 }
 
-/* Called when server transport layer attempts to receive data from client */
-ssize_t write_sec_server(uint8_t* buf, size_t nbytes) {
-    printbuf(buf, nbytes, "RECEIVED");
-    uint8_t* curr = buf;
-    uint8_t* peer_key;
-    uint16_t nonce_size, peer_key_size, signature_size, nonce_signature_size;
-    switch (state) {
-        case SERVER_AWAIT_CLIENT_HELLO:
-            load_private_key(server_key_file);
-            // Check client hello
-            if (*curr != pf::client_hello)
-                security_fail(4);
-            curr += 3;
-
-            // Check nonce
-            if (*curr != pf::client_nonce)
-                security_fail(4);
-            curr++;
-            nonce_size = ntoh_2_bytes(curr);
-            curr += 2;
-            signed_peer_nonce_size = sign(curr, nonce_size, signed_peer_nonce);
-            state = SERVER_HELLO;
-            return nbytes;
-        case SERVER_HELLO:
-            security_fail(4);
-        case SERVER_AWAIT_CLIENT_KEY:
-            // Check client key exchange req
-            if (*curr != pf::key_exchange_req)
-                security_fail(4);
-            curr += 3;
-
-            // Check the certificate
-            if (*curr != pf::certificate)
-                security_fail(4);
-            curr += 3;
-            
-            // load the peer public key
-            if (*curr != pf::public_key)
-                security_fail(4);
-            curr++;
-            peer_key_size = ntoh_2_bytes(curr);
-            curr += 2;
-            peer_key = curr;
-            load_peer_public_key(peer_key, peer_key_size);
-            curr += peer_key_size;
-
-            // verify the signature in the cert with the peer public key
-            if (*curr != pf::signature)
-                security_fail(4);
-            curr++;
-            signature_size = ntoh_2_bytes(curr);
-            curr += 2;
-            if (verify(peer_key, peer_key_size, curr, signature_size, ec_peer_public_key) != 1)
-                security_fail(1);
-            curr += signature_size;
-
-            // verify the nonce signature with the peer public key
-            if (*curr != pf::server_nonce_signature)
-                security_fail(4);
-            curr++;
-            nonce_signature_size = ntoh_2_bytes(curr);
-            curr += 2;
-            printbuf(curr, nonce_signature_size, "Signed server nonce from client is");
-            if (verify(my_nonce, NONCE_SIZE, curr, nonce_signature_size, ec_peer_public_key) != 1)
-                security_fail(2);
-            
-            // derive the keys
-            derive_secret();
-            derive_keys();
-
-            state = SERVER_HANDSHAKE_FINISHED;
-            return nbytes;
-        case SERVER_HANDSHAKE_FINISHED:
+/* Called when server transport layer attempts to send data to client */
+static ssize_t read_sec_server(uint8_t* buf, size_t nbytes) {
+    ssize_t bytes = 0;
+    switch (curr_state) {
+        case state::server_await_client_hello:
+            return 0;
+        case state::server_hello:
+            bytes = make_server_hello(buf, nbytes);
             break;
-        case SERVER_NORMAL:
+        case state::server_await_client_key:
+            return 0;
+        case state::server_handshake_finished:
+            // Send finished
+            buf[0] = pf::finished;
+            memset(buf + 1, 0, 2);
+            bytes = 3;
+            curr_state = state::server_normal;
+            break;
+        case state::server_normal:
+            bytes = read_and_encrypt(buf, nbytes);
+            break;
+    }
+    printbuf(buf, bytes, "SENT");
+    return bytes;
+}
+
+static ssize_t recv_client_hello(uint8_t* buf, size_t nbytes) {
+    // Check client hello
+    if (*buf != pf::client_hello)
+        security_fail(4);
+    buf += 3;
+
+    // Check nonce
+    if (*buf != pf::client_nonce)
+        security_fail(4);
+    buf++;
+    auto nonce_size = ntoh_2_bytes(buf);
+    buf += 2;
+    signed_peer_nonce_size = sign(buf, nonce_size, signed_peer_nonce);
+    curr_state = state::server_hello;
+    return nbytes;
+}
+
+static ssize_t recv_client_key_exchange(uint8_t* buf, size_t nbytes) {
+    // Check client key exchange req
+    if (*buf != pf::key_exchange_req)
+        security_fail(4);
+    buf += 3;
+
+    // Check the certificate
+    if (*buf != pf::certificate)
+        security_fail(4);
+    buf += 3;
+    
+    // load the peer public key
+    if (*buf != pf::public_key)
+        security_fail(4);
+    buf++;
+    auto peer_key_size = ntoh_2_bytes(buf);
+    buf += 2;
+    auto peer_key = buf;
+    load_peer_public_key(peer_key, peer_key_size);
+    buf += peer_key_size;
+
+    // verify the signature in the cert with the peer public key
+    if (*buf != pf::signature)
+        security_fail(4);
+    buf++;
+    auto signature_size = ntoh_2_bytes(buf);
+    buf += 2;
+    if (verify(peer_key, peer_key_size, buf, signature_size, ec_peer_public_key) != 1)
+        security_fail(1);
+    buf += signature_size;
+
+    // verify the nonce signature with the peer public key
+    if (*buf != pf::server_nonce_signature)
+        security_fail(4);
+    buf++;
+    auto nonce_signature_size = ntoh_2_bytes(buf);
+    buf += 2;
+    if (verify(my_nonce, NONCE_SIZE, buf, nonce_signature_size, ec_peer_public_key) != 1)
+        security_fail(2);
+    
+    // derive the keys
+    derive_secret();
+    derive_keys();
+
+    curr_state = state::server_handshake_finished;
+    return nbytes;
+}
+
+/* Called when server transport layer attempts to receive data from client */
+static ssize_t write_sec_server(uint8_t* buf, size_t nbytes) {
+    printbuf(buf, nbytes, "RECEIVED");
+    switch (curr_state) {
+        case state::server_await_client_hello:
+            return recv_client_hello(buf, nbytes);
+        case state::server_hello:
+            security_fail(4);
+        case state::server_await_client_key:
+            return recv_client_key_exchange(buf, nbytes);
+        case state::server_handshake_finished:
+            break;
+        case state::server_normal:
             return decrypt_and_write(buf, nbytes);
     }
     return 0;
+}
+
+void init_sec(int client) {
+    if (client) {
+        read_sec = read_sec_client;
+        write_sec = write_sec_client;
+        load_ca_public_key(ca_public_key_file);
+        generate_private_key();
+        derive_public_key();
+        derive_self_signed_certificate();
+        curr_state = state::client_hello;
+    } else {
+        read_sec = read_sec_server;
+        write_sec = write_sec_server;
+        load_certificate(server_cert_file);
+        load_private_key(server_key_file);
+        curr_state = state::server_await_client_hello;
+    }
 }

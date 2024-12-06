@@ -17,7 +17,9 @@ int main(int argc, char *argv[]) {
     int stdin_nonblock = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
     if (stdin_nonblock < 0) die("non-block stdin");
 
-    init_client(atoi(argv[2]), argv[1], read_sec_client, write_sec_client);
+    init_sec(1);
+
+    init_client(atoi(argv[2]), argv[1], read_sec, write_sec);
 
     transport_listen();
 }
