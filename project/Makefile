@@ -2,11 +2,11 @@ CC=gcc
 CXX=g++
 LDFLAGS=-lcrypto
 
+all: clean build
+
 debug: CFLAGS=-g -fsanitize=address
 debug: CXXFLAGS=-g -fsanitize=address
 debug: all
-
-all: clean build
 
 build: client server
 
@@ -17,7 +17,7 @@ server: server.cpp common.o deque.o sec.o security.o
 	${CXX} -o $@ $^ ${LDFLAGS} ${CXXFLAGS}
 
 clean:
-	rm -rf server client *.out *.dSYM *.o
+	rm -rf server client *.out *.dSYM *.bin *.o
 
 zip: clean
 	rm -f project0.zip

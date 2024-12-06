@@ -7,9 +7,7 @@
 #include <unistd.h>
 #include <vector>
 #include <array>
-#include <deque>
 #include <memory>
-#include <algorithm>
 #include <cassert>
 extern "C" {
     #include "security.h"
@@ -52,6 +50,10 @@ namespace pf {
 static int state = 0;
 
 static uint8_t my_nonce[255];
+
+static char ca_public_key_file[] = "ca_public_key.bin";
+static char server_cert_file[] = "server_cert.bin";
+static char server_key_file[] = "server_key.bin";
 
 #define NONCE_SIZE 32
 #define IV_SIZE 16
@@ -195,7 +197,7 @@ ssize_t read_sec_client(uint8_t* buf, size_t nbytes) {
     vector<uint8_t> tempbuf;
     switch (state) {
         case CLIENT_HELLO: // Send the client hello
-            load_ca_public_key("ca_public_key.bin");
+            load_ca_public_key(ca_public_key_file);
             bytes = (NONCE_SIZE + 3) + 3;
             if (nbytes < bytes)
                 break;
@@ -330,7 +332,7 @@ ssize_t read_sec_server(uint8_t* buf, size_t nbytes) {
         case SERVER_AWAIT_CLIENT_HELLO:
             break;
         case SERVER_HELLO:
-            load_certificate("server_cert.bin");
+            load_certificate(server_cert_file);
 
             bytes = (NONCE_SIZE + 3) + cert_size + (signed_peer_nonce_size + 3) + 3;
             if (nbytes < bytes)
@@ -382,7 +384,7 @@ ssize_t write_sec_server(uint8_t* buf, size_t nbytes) {
     uint16_t nonce_size, peer_key_size, signature_size, nonce_signature_size;
     switch (state) {
         case SERVER_AWAIT_CLIENT_HELLO:
-            load_private_key("server_key.bin");
+            load_private_key(server_key_file);
             // Check client hello
             if (*curr != pf::client_hello)
                 security_fail(4);
@@ -443,7 +445,6 @@ ssize_t write_sec_server(uint8_t* buf, size_t nbytes) {
             // derive the keys
             derive_secret();
             derive_keys();
-
 
             state = SERVER_HANDSHAKE_FINISHED;
             return nbytes;
