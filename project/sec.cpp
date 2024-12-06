@@ -1,9 +1,8 @@
 #include "sec.h"
 #include "common.h"
-#include <string.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <iostream>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
 #include <unistd.h>
 #include <vector>
 #include <array>
@@ -65,16 +64,16 @@ static size_t signed_peer_nonce_size;
 static inline void security_fail(int code) {
     switch (code) {
         case 1:
-            cerr << "Failed to verify incoming signature with public key" << endl;
+            fprintf(stderr, "Failed to verify incoming signature with public key\n");
             break;
         case 2:
-            cerr << "Failed to verify incoming nonce signature with peer public key" << endl;
+            fprintf(stderr, "Failed to verify incoming nonce signature with peer public key\n");
             break;
         case 3:
-            cerr << "Failed to verify HMAC digest of incoming data" << endl;
+            fprintf(stderr, "Failed to verify HMAC digest of incoming data\n");
             break;
         case 4:
-            cerr << "Bad format in security packet" << endl;
+            fprintf(stderr, "Bad format in security packet\n");
             break;
     }
     exit(code);
@@ -108,7 +107,6 @@ static ssize_t read_and_encrypt(uint8_t* buf, size_t nbytes) {
         return read_bytes;
 
     ssize_t ciphertext_len = -(-read_bytes >> 4) << 4;
-    cerr << "bytes read: " << read_bytes << ", ciphertext length: " << ciphertext_len << endl;
     ssize_t bytes = ciphertext_len + 60;
     vector<uint8_t> tempbuf;
 

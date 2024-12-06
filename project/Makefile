@@ -1,6 +1,6 @@
 CC=gcc
 CXX=g++
-LDLIBS=-lcrypto
+LDLIBS=-lcrypto -l:libstdc++.a
 
 all: clean build
 
@@ -10,9 +10,9 @@ debug: all
 
 build: client server
 
-client: client.cpp common.o deque.o sec.o security.o
+client: client.o common.o deque.o sec.o security.o
 
-server: server.cpp common.o deque.o sec.o security.o
+server: server.o common.o deque.o sec.o security.o
 
 clean:
 	rm -rf server client *.out *.dSYM *.bin *.o
