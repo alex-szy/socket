@@ -68,6 +68,9 @@ static inline void security_fail(int code) {
         case 2:
             cerr << "Failed to verify incoming nonce signature with peer public key" << endl;
             break;
+        case 3:
+            cerr << "Failed to verify HMAC digest of incoming data" << endl;
+            break;
         case 4:
             cerr << "Bad format in security packet" << endl;
             break;
@@ -140,7 +143,49 @@ static ssize_t read_and_encrypt(uint8_t* buf, size_t nbytes) {
 }
 
 static ssize_t decrypt_and_write(uint8_t* buf, size_t nbytes) {
+    uint8_t* curr = buf;
+    if (*curr != pf::data)
+        return 0;
+    curr += 3;
+    if (*curr != pf::init_vec)
+        return 0;
+    curr += 3;
 
+    // Copy the iv
+    vector<uint8_t> iv_cat_cipher(curr, curr + IV_SIZE);
+    curr += IV_SIZE;
+
+    if (*curr != pf::ciphertext)
+        return 0;
+    curr++;
+
+    uint16_t ciphertext_len = ntoh_2_bytes(curr);
+    curr += 2;
+
+    // Copy the ciphertext
+    iv_cat_cipher.insert(iv_cat_cipher.end(), curr, curr + ciphertext_len);
+    curr += ciphertext_len;
+
+    if (*curr != pf::mac)
+        return 0;
+    curr++;
+    uint16_t mac_size = ntoh_2_bytes(curr);
+    curr += 2;
+    assert(mac_size == MAC_SIZE);
+
+    // Compute the hmac
+    array<uint8_t, 32> mac;
+    hmac(iv_cat_cipher.data(), iv_cat_cipher.size(), mac.data());
+
+    for (int i = 0; i < MAC_SIZE; ++i) {
+        if (curr[i] != mac[i])
+            security_fail(3);
+    }
+
+    auto plaintext = make_unique<uint8_t[]>(ciphertext_len);
+    ssize_t bytes = decrypt_cipher(iv_cat_cipher.data() + IV_SIZE, ciphertext_len, iv_cat_cipher.data(), plaintext.get());
+    
+    return write(STDOUT_FILENO, plaintext.get(), bytes);
 }
 
 
@@ -271,7 +316,7 @@ ssize_t write_sec_client(uint8_t* buf, size_t nbytes) {
             state = CLIENT_NORMAL;
             break;
         case CLIENT_NORMAL:
-            break;
+            return decrypt_and_write(buf, nbytes);
     }
     return 0;
 }
@@ -320,7 +365,7 @@ ssize_t read_sec_server(uint8_t* buf, size_t nbytes) {
             state = SERVER_NORMAL;
             break;
         case SERVER_NORMAL:
-            break;
+            return read_and_encrypt(buf, nbytes);
     }
     if (!tempbuf.empty()) {
         memcpy(buf, tempbuf.data(), tempbuf.size());
@@ -405,7 +450,7 @@ ssize_t write_sec_server(uint8_t* buf, size_t nbytes) {
         case SERVER_HANDSHAKE_FINISHED:
             break;
         case SERVER_NORMAL:
-            break;
+            return decrypt_and_write(buf, nbytes);
     }
     return 0;
 }
