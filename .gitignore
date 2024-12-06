@@ -9,3 +9,4 @@ test.c
 pseudo
 keys/
 *.o
+*.bin

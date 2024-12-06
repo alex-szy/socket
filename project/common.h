@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
 
 static inline void die(const char s[]) {
     perror(s);
