@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     }
 
     init_sec(0);
-    listen_loop(sockfd, &client_addr, SERVER_AWAIT, read_sec, write_sec);
+    listen_loop(sockfd, &client_addr, SERVER_AWAIT, read_sec, (void(*)(uint8_t*, size_t))(write_sec));
 
     return 0;
 }

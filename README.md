@@ -1,10 +1,10 @@
 # CS 118 Fall 24 Project - Sockets
 
 ## Design
-I chose to implement the sockets in C, with a small libary of helper functions to manipulate packets, as well as a deque implementation which serves as the send and receive buffers.
+For the security layer, I chose to implement my project in C++, to make use of the standard library's containers. I used vectors as buffers to build the packets, and dumped the contents into the buffers when I was done.
 
 ## Issues
-It was difficult to think of possible edge cases as this is a networking problem. I had issues with the receive buffer, in which I was accepting duplicate packets into the receive buffer, and also accepting packets that were already acked.
+This project was relatively easy compared with project 1. However, I had an issue with the client key exchange request testcase which was mysteriously failing despite my logs telling me that the code was working as it should.
 
 ## Solutions
-To fix the algorithmic problems with the deque implementation, I used gdb to step through the code and make sure that it was behaving as I intended. Additionally, I tried a different code layout and implemented it on the server code, having a separate for loop for each stage in the handshake process. This allowed me to isolate the problems to a smaller section of code, making debugging easier.
+Due to the similar interface between my implementation and the starter code given, I was very easily able to swap my transport layer over to the starter code, which fixed the issue.

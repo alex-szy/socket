@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     server_addr.sin_port = htons(PORT); // Big endian
 
     init_sec(1);
-    listen_loop(sockfd, &server_addr, CLIENT_START, read_sec, write_sec);
+    listen_loop(sockfd, &server_addr, CLIENT_START, read_sec, (void(*)(uint8_t*, size_t))write_sec);
 
     return 0;
 }
