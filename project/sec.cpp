@@ -1,12 +1,9 @@
 #include "sec.h"
-#include "common.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <unistd.h>
 #include <vector>
-#include <array>
-#include <memory>
 #include <cassert>
 extern "C" {
     #include "security.h"
@@ -105,10 +102,8 @@ static ssize_t read_and_encrypt(uint8_t* buf, size_t nbytes) {
     int max_bytes = (nbytes - 60) >> 4 << 4 - 1;
     if (max_bytes <= 0)
         return 0;
-    auto readbuf = make_unique<uint8_t[]>(max_bytes);
-    if (readbuf == nullptr)
-        die("Allocating read buffer failed");
-    ssize_t read_bytes = read(STDIN_FILENO, readbuf.get(), max_bytes);
+    vector<uint8_t> readbuf(max_bytes, 0);
+    ssize_t read_bytes = read(STDIN_FILENO, readbuf.data(), max_bytes);
     if (read_bytes <= 0)
         return read_bytes;
 
@@ -125,7 +120,7 @@ static ssize_t read_and_encrypt(uint8_t* buf, size_t nbytes) {
     append_hton_2_bytes(tempbuf, IV_SIZE);
 
     vector<uint8_t> iv_cat_cipher(IV_SIZE + ciphertext_len, 0);
-    encrypt_data(readbuf.get(), read_bytes, iv_cat_cipher.data(), iv_cat_cipher.data() + IV_SIZE);
+    encrypt_data(readbuf.data(), read_bytes, iv_cat_cipher.data(), iv_cat_cipher.data() + IV_SIZE);
     
     tempbuf.insert(tempbuf.end(), iv_cat_cipher.data(), iv_cat_cipher.data() + IV_SIZE);
 
@@ -179,7 +174,7 @@ static ssize_t decrypt_and_write(uint8_t* buf, size_t nbytes) {
     assert(mac_size == MAC_SIZE);
 
     // Compute the hmac
-    array<uint8_t, 32> mac;
+    vector<uint8_t> mac(MAC_SIZE, 0);
     hmac(iv_cat_cipher.data(), iv_cat_cipher.size(), mac.data());
 
     for (int i = 0; i < MAC_SIZE; ++i) {
@@ -187,10 +182,10 @@ static ssize_t decrypt_and_write(uint8_t* buf, size_t nbytes) {
             security_fail(3);
     }
 
-    auto plaintext = make_unique<uint8_t[]>(ciphertext_len);
-    ssize_t bytes = decrypt_cipher(iv_cat_cipher.data() + IV_SIZE, ciphertext_len, iv_cat_cipher.data(), plaintext.get());
+    vector<uint8_t> plaintext(ciphertext_len, 0);
+    ssize_t bytes = decrypt_cipher(iv_cat_cipher.data() + IV_SIZE, ciphertext_len, iv_cat_cipher.data(), plaintext.data());
     
-    return write(STDOUT_FILENO, plaintext.get(), bytes);
+    return write(STDOUT_FILENO, plaintext.data(), bytes);
 }
 
 static ssize_t make_client_hello(uint8_t* buf, size_t nbytes) {

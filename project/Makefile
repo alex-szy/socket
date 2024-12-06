@@ -10,9 +10,9 @@ debug: all
 
 build: client server
 
-client: client.o common.o deque.o sec.o security.o
+client: client.o transport.o sec.o security.o
 
-server: server.o common.o deque.o sec.o security.o
+server: server.o transport.o sec.o security.o
 
 clean:
 	rm -rf server client *.out *.dSYM *.bin *.o
