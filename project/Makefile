@@ -1,6 +1,6 @@
 CC=gcc
 CXX=g++
-LDFLAGS=-lcrypto
+LDLIBS=-lcrypto
 
 all: clean build
 
@@ -11,10 +11,8 @@ debug: all
 build: client server
 
 client: client.cpp common.o deque.o sec.o security.o
-	${CXX} -o $@ $^ ${LDFLAGS} ${CXXFLAGS}
 
 server: server.cpp common.o deque.o sec.o security.o
-	${CXX} -o $@ $^ ${LDFLAGS} ${CXXFLAGS}
 
 clean:
 	rm -rf server client *.out *.dSYM *.bin *.o
